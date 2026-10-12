@@ -1,0 +1,17 @@
+# Roland's copyrighted ROM data and anything built or decoded from it: supply your own dump
+dumps/
+re/build/
+re/out/
+*.bin
+!re/dragon_frames.bin
+*.lst
+re/pedal_data.inc
+# Roland manuals (OCR) and a factory patch read from the unit
+gp16_owners_manual_ocr.txt
+gp16_service_notes_ocr.txt
+re/backup_tempbuf_before_dimebag.json
+# local tools and caches
+tools/
+__pycache__/
+# belongs to the ESP32 utility box web programmer, not this mod
+make_gp16_def.py
