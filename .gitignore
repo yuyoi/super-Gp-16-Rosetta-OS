@@ -15,3 +15,6 @@ tools/
 __pycache__/
 # belongs to the ESP32 utility box web programmer, not this mod
 make_gp16_def.py
+# local backup copies of older sources (git history has them)
+re/pedals_v*.py
+re/gen_pedal_data_v*.py

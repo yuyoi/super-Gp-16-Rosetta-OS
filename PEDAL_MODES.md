@@ -133,3 +133,11 @@ New knobs: Dyna Comp OUT SNS | CS-3 LVL TON ATK SUS | Touch Wah SNS RNG Q | Slic
   NS-2 THR DEC | Doubler TIM LVL | Pitch INT (-12..+12) MIX FIN | Autopan RAT DEP.
 ORDER: A = WAH>DIRT (default) / DIRT>WAH (stock) / PHASE>DIRT ; B = STOCK / TREM LAST / REV>DELAY.
 GP-16 can't run different effects per jack: OUT only picks CH1 / CH2 / both (each channel = stereo A/B pair).
+
+## v1.0 = JSW ROSETTA OS v1 (2026-10-13, built + emulated, gp16_mod_v1_0_sst512k.bin md5 41c30707...)
+User picks added (macro knobs = one knob moves several params): HM-2 (LVL LOW HI DST), Rangemaster (BST VOL), OD-1 (LVL DRV), Fuzz Factory (VL GT CP DR SB, grabs the gate), Octavia (VOL FUZ OCT TON, grabs B2 pitch), Ram's Head / Green Russian (VOL TON-tilt SUS), Electric Mistress (RAT RNG COL + FM switch), CE-1 (INT LVL GRT + VIB switch, grabs A2 for grit), Whammy (MOD 1-5 = oct up / oct down / 5th / 4th / +1, MIX; expression pedal), Memory Man (BLD FBK DLY CHO, grabs B2), Shoegaze Wash (WSH = reverb + decay + feedback + chorus, TIM, TON), Ross (LVL SUS), Orange Squeezer (SQZ LVL), Small Clone (RAT + DEP LO/HI), Dimension C (mode buttons 1-4, chorus + doubler), amps JC-120 and 5150.
+Metal Zone = 6 knobs on the user's layout: `LO HM LM H  G  L` over 2-digit values (whole steps), underline cursor.
+Board memories 1-8 (WRITE saves, BOARD MEMORY page loads). All voicings are ear-tune targets.
+
+## v2.0 (2026-10-13): voicings redone from the original circuits
+All recipes now written in real units (Hz / dB / Q / ms) from the firmware's own EQ tables; old EQ frequencies were off. Knobs do what the originals do (Muff/DS-1 TONE = tilt, RAT FILTER = low-pass, Klon GAIN adds mid bump, TS TONE = treble). Vintage references, not modern takes. Still ear-tune targets.

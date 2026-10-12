@@ -1,9 +1,10 @@
 <p align="center"><img src="https://raw.githubusercontent.com/yuyoi/Rompler-RosettaRom/main/assets/logo.png" width="360" alt="Rosetta"></p>
 
-# Super GP-16 Rosetta OS
+# Super GP-16 Rosetta OS (JSW ROSETTA OS v2.1)
 
-> **Runs on real hardware.** v0.8 (pedal + rig modes) runs on a real Roland GP-16 from a flash chip in the IC11
-> socket. v0.9 (board mode) passes full-firmware emulation; its first hardware burn is next. See [Status](#status).
+> **Runs on real hardware.** v2.1 runs on a real Roland GP-16 from a flash chip in the IC11 socket. Pedal and rig
+> modes are played on the unit. Board mode and board memories pass full-firmware emulation; their hardware test is in
+> progress. See [Status](#status).
 
 A new OS for the Roland GP-16 guitar processor: the rack becomes **one pedal with real knobs**, a **pedal + amp rig**,
 or a **12-slot pedalboard**, played from the front panel with no patch list in the way. It patches your own IC11 dump
@@ -14,37 +15,46 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 
 ## What it does
 
-- **Boots as the pedal.** Power-on goes straight to the last mode you used (PEDAL, RIG or BOARD).
-- **PEDAL mode:** pick one of 39 pedals; the GP-16 becomes that pedal.
-- **RIG mode:** one pedal into one of 7 amps (amp = EQ + cab sim + comp voicing).
-- **BOARD mode (v0.9):** a pedal in every GP-16 block. Each pedal grabs the extra blocks its voicing needs (a Tube
-  Screamer takes the EQ, a Leslie takes the tremolo) when they are free. Chain-order presets, and an **A/B/Y box**
-  for the outputs.
-- **Real knobs.** Each pedal and amp shows its own knob names (`DRV TON LVL`, `VOL TRB BAS`...), 0-10 in half
-  steps, up to 4 per screen. Knob moves are live, through the firmware's own parameter setters (no patch reload).
-- **Boot dragon:** an 8-frame flying dragon replaces the stock running man at power-on.
+- **Boots as the pedal.** Power-on shows "JSW ROSETTA OS" with a flying dragon, then goes straight to the last mode
+  you used (PEDAL, RIG or BOARD).
+- **PEDAL mode:** pick one of 55 pedals; the GP-16 becomes that pedal.
+- **RIG mode:** one pedal into one of 9 amps (amp = EQ + cab sim + comp voicing).
+- **BOARD mode:** a pedal in every GP-16 block.
+  - Each pedal borrows the extra blocks its voicing needs (a Tube Screamer takes the EQ, a Leslie takes the tremolo and
+    a touch of the dirt block, the Space Echo takes the spring reverb) when they are free.
+  - Chain-order presets, an **A/B/Y box** for the outputs, and **8 board memories**.
+- **Real knobs that act like the originals.** Each knob can move several settings at once, like the real circuit:
+  - Big Muff and DS-1 TONE are true tilt controls; RAT FILTER is a low-pass; Klon GAIN also raises its mid bump.
+  - HM-2 LOW and HIGH boost about 100 Hz and 1.1 kHz.
+  - Switches (Phase 90 script/block, Leslie slow/fast, Small Clone depth) and mode buttons (Dimension C).
+- **Voiced in real units.** Every voicing is written in Hz, dB and Q from the firmware's own EQ tables. The
+  fuzzes, overdrives and Funeral are level-matched.
+- **Expression pedal per pedal.** The wahs sweep, the Whammy bends. On a board, the first pedal in the chain that
+  wants the expression pedal gets it.
+- **Pedals can bring their own chain order.** FUNERAL is the Funeralopolis path: Muff, into a parked wah, into the
+  compressor acting as a cranked amp.
 - **LINE OUT FILTER knobs** get a dB law with a true OFF at 0 (stock never fully cuts a band).
 - **SysEx debug port** (MIDI ch 1): DSP coefficient writes and memory read/write from a PC (`re/gp16poke.py`).
 
-### Pedals (39) and amps (7)
+### Pedals (55) and amps (9)
 
 | Slot | Pedals |
 |---|---|
-| A1 COMP | DYNA COMP, CS-3 COMP |
-| A2 DIRT | TUBE SCREAMER, RAT, DS-1, BIG MUFF, METAL ZONE, SD-1, KLON, FUZZ FACE, METAL MUFF, FUNERAL, IRON MAN |
+| A1 COMP | DYNA COMP, CS-3 COMP, ROSS COMP, OR SQUEEZER |
+| A2 DIRT | TUBE SCREAMER, RAT, DS-1, BIG MUFF, METAL ZONE, SD-1, KLON, FUZZ FACE, METAL MUFF, FUNERAL, IRON MAN, HM-2, RANGEMASTER, OD-1, FUZZ FACTORY, OCTAVIA, RAM'S HEAD, GREEN RUSSIAN |
 | A3 WAH/FILTER | TOUCH WAH, CRYBABY WAH, RESO WAH |
 | A4 PHASER | SLICER, PHASE 90 |
 | A5 EQ | GE-7 EQ |
 | A6 GATE | NS-2 GATE |
 | B1 SHORT DELAY | DOUBLER, SLAPBACK |
-| B2 MOD | PITCH/OCTAVE, CHORUS CE-2, DIMENSION D, FLANGER, LESLIE |
+| B2 MOD | PITCH/OCTAVE, CHORUS CE-2, DIMENSION D, FLANGER, LESLIE, ELEC MISTRESS, CE-1, WHAMMY, SMALL CLONE, DIMENSION C |
 | B3 TREM/PAN | AUTOPAN, TREMOLO |
-| B4 DELAY | DIGITAL DLY, SPACE ECHO |
-| B5 REVERB | SPRING, HALL/PLATE, SHIMMER, CATHEDRAL, CAVE, CHURCH, STAGE, AMBIENT |
-| B6 AMP/CAB | CLEAN, TWIN, JCM800, AC30, DOOM, DI / FLAT, RADIO |
+| B4 DELAY | DIGITAL DLY, SPACE ECHO, MEMORY MAN |
+| B5 REVERB | SPRING, HALL/PLATE, SHIMMER, CATHEDRAL, CAVE, CHURCH, STAGE, AMBIENT, SHOEGAZE WASH |
+| B6 AMP/CAB | CLEAN, TWIN, JCM800, AC30, DOOM, DI / FLAT, RADIO, JC-120, 5150 |
 
-FUNERAL is a doom fuzz, IRON MAN is an early-Iommi voicing, RADIO is a germanium transistor radio. The voicings are
-recipes in `re/pedals.py` (SysEx parameter values), the knobs in `re/gen_pedal_data.py`. Knob list per pedal:
+Two voicings are custom: FUNERAL (doom fuzz) and IRON MAN (an early-Iommi voicing). RADIO is a transistor-radio
+amp. The voicings are recipes in `re/pedals.py`, and the knobs are in `re/gen_pedal_data.py`. Knob list per pedal:
 [`PEDAL_MODES.md`](PEDAL_MODES.md).
 
 ## Controls
@@ -55,20 +65,24 @@ recipes in `re/pedals.py` (SysEx parameter values), the knobs in `re/gen_pedal_d
 | split screen | FUNCTION up / down / **EDIT** | PEDAL / RIG / BOARD mode |
 | split screen | SYSTEM again | the stock System menu (all stock settings kept) |
 | any mode | **ESC** | back to the split screen; ESC again = stock patch screen |
-| knob screen | buttons **1-4** / **5-8** | knob 1-4 up / down (one column per knob: 1 and 5, 2 and 6...) |
-| knob screen | dial | moves the knob touched last (marked `*`) |
+| knob screen (1-4 knobs) | buttons **1-4** / **5-8** | knob 1-4 up / down (one column per knob: 1 and 5, 2 and 6...) |
+| knob screen (5-6 knobs) | **1-3** / **5-7**, **4** / **8** | pick a knob (underline cursor), then up / down |
+| knob screen | dial | moves the knob touched last (marked `*`, or the underline cursor) |
+| Dimension C | **1-4** | pick a mode; the lit one again = off |
 | PEDAL / RIG | FUNCTION | next / previous page (knobs, amp knobs, pick pedal, pick amp) |
 | pick pages | dial or BANK / GROUP | previous / next pedal or amp |
-| BOARD | FUNCTION | next / previous slot: A1 COMP ... B6 AMP, then ORDER, then OUT |
+| BOARD | FUNCTION | next / previous page: slots A1 COMP ... B6 AMP, then ORDER, OUT, BOARD MEMORY |
 | BOARD slot | BANK / GROUP | previous / next pedal for that slot (OUT = empty) |
 | BOARD slot | buttons + dial | that pedal's knobs |
-| BOARD ORDER | 1 / 5 | A chain: WAH>DIRT, DIRT>WAH, PHASE>DIRT |
+| BOARD ORDER | 1 / 5 | A chain: WAH>DIRT, DIRT>WAH, PHASE>DIRT, DIRT>WAH>COMP |
 | BOARD ORDER | 2 / 6 | B chain: STOCK, TREM LAST, REV>DELAY |
 | BOARD OUT | 1 / 5 | A/B/Y box: AMP 1 (CH1), AMP 2 (CH2), BOTH |
+| any BOARD page | **WRITE**, then **1-8** | save the board to memory 1-8 (ESC = cancel) |
+| BOARD MEMORY | **1-8** | load that board (`-` = empty, `>` = last loaded/saved) |
 
 A slot whose block is borrowed shows `<NAME>` of the pedal using it and refuses a new pedal until that pedal changes.
-The gate stays last in chain A and the amp/cab last in chain B (the GP-16 fixes those positions). Board mode keeps
-one live board; knob positions are remembered per pedal and amp in battery RAM.
+The gate stays last in chain A and the amp/cab last in chain B (the GP-16 fixes those positions). Knob positions are
+remembered per pedal and amp in battery RAM. A board memory keeps its pedals, order, outputs and knob positions.
 
 ## Build and burn
 
@@ -84,26 +98,31 @@ anything other than the "Super GP Ver 1.0" ROM (MD5 `ac5f56bcb3d8c30ddf3f1ffe88b
    cd re
    py -3.11 build_all.py ../ic11.bin
    ```
-   This writes `re/build/gp16_mod_v0_9.bin` (128 KB) and `re/build/gp16_mod_v0_9_sst512k.bin` (the same image 4x).
+   This writes `re/build/gp16_mod_v2_1.bin` (128 KB) and `re/build/gp16_mod_v2_1_sst512k.bin` (the same image 4x).
 3. **Burn** the `_sst512k` file to a 512 KB flash (SST39SF040, or AMIC A29040 for chips that ID as `0x3786`), read it
    back and compare:
    ```
-   minipro -p SST39SF040 -w gp16_mod_v0_9_sst512k.bin
+   minipro -p SST39SF040 -w gp16_mod_v2_1_sst512k.bin
    ```
 4. **Fit it in IC11** (notch the same way). The GP-16 board already ties pin 31 high, so the flash drops straight in:
    no wires, no cuts. Put the original chip back any time.
 
-The first boot after a new version resets the stored knob positions and the board (the pedal tables changed).
-Please don't share patched `.bin` files: share this repo.
+- **Factory reset warning:** only 1 factory preset is kept (the space went to the new OS), so a factory reset fills
+  every patch slot with it. Your own patches are only touched if you run one.
+- **Settings across versions:** knob positions and board memories reset only when the pedal list or knob layout
+  changes; voicing tweaks keep them.
+- Please don't share patched `.bin` files: share this repo.
 
 ### Test in emulation first (optional)
 
-`pip install unicorn capstone`, then run the whole firmware, boot to the main loop and a scripted front-panel session:
+`pip install unicorn capstone`. Each script runs the whole firmware, boots to the main loop and plays a scripted
+front-panel session:
 ```
-py -3.11 -I emu_v08.py build/gp16_mod_v0_9.bin    # pedal + rig modes, live knobs
-py -3.11 -I emu_v09.py build/gp16_mod_v0_9.bin    # board mode: grabs, order, A/B/Y
+py -3.11 -I emu_v10.py build/gp16_mod_v2_1.bin    # macros, 6-knob screen, switches, Dim C, exp pedal, rig, board memories
+py -3.11 -I emu_v09.py build/gp16_mod_v2_1.bin    # board mode: grabs, order, A/B/Y
+py -3.11 -I emu_boot_banner.py build/gp16_mod_v2_1.bin   # boot screen text
 ```
-Both print `PASS`.
+The test scripts print `PASS`. `emu_v10.py` also checks that nothing but the OS writes to its battery-RAM areas.
 
 ## Files
 
@@ -111,15 +130,17 @@ Both print `PASS`.
 |---|---|
 | `re/build_all.py` | one-shot build from your dump |
 | `re/build_mod.py` | applies every patch (each checks the original bytes first) and places the new code |
-| `re/pedal_menu.asm` | the PEDAL / RIG / BOARD OS (NASM, x86-16, runs at ROM 0x0A00) |
-| `re/pedals.py` | pedal and amp voicings as SysEx recipes |
-| `re/gen_pedal_data.py` | knobs, board slots and the recipe -> internal-buffer mapping (read from your dump) -> `pedal_data.inc` |
+| `re/pedal_menu.asm` | the PEDAL / RIG / BOARD OS (NASM, x86-16, runs at ROM 0x0200) |
+| `re/pedals.py` | pedal and amp voicings in real units (Hz, dB, Q, ms), plus the level trims |
+| `re/gen_pedal_data.py` | knobs (macros, tables, switches), board slots, recipe -> internal-buffer mapping -> `pedal_data.inc` |
+| `re/level_match.py` | loudness estimate per dirt pedal, used for the level trims |
 | `re/dragon_boot.asm`, `re/dragon_vec.py`, `re/dragon_frames.bin` | boot dragon routine and art |
 | `re/backdoor.py`, `re/gp16poke.py` | SysEx debug port (ROM side + PC tool, py -3.10 + mido) |
-| `re/emu_menu.py`, `re/emu_v08.py`, `re/emu_v09.py` | full-firmware emulation tests (unicorn) |
+| `re/emu_v10.py`, `re/emu_v09.py`, `re/emu_v08.py`, `re/emu_menu.py`, `re/emu_boot_banner.py` | full-firmware emulation tests (unicorn) |
 | `re/gp16dis.py`, `re/entries.py`, `re/coefmap.py`, `re/instrmap.py` | V25 disassembler and DSP-write analysis |
 | `re/dsprig.py` | audio measurement rig for the DSP instruction-set work |
-| `re/GP16_RE.md` | ROM map, CPU/DSP memory map, parameter tables, key map, LCD, how each mod hooks in |
+| `re/GP16_RE.md` | ROM map, CPU/DSP memory map, parameter and frequency tables, key map, LCD, how each mod hooks in |
+| `PC_TONE_APP.md` | plan: PC loader, USER pedal slots, translating existing tone formats into GP-16 settings |
 | `PEDAL_MODES.md`, `GP16_NOTES.md`, `FILTER_REBUILD_IDEAS.md`, `re/OS_DESIGN_v04.md` | design notes |
 
 Disassembling your dump: `py -3.11 -I gp16dis.py ../dumps/gp16_u1_ic11.bin out` writes `re/out/listing.asm`. The
@@ -131,23 +152,27 @@ listing is derived from Roland's code: keep it private.
 |---|---|---|
 | 0.1 | boot banner + LINE OUT FILTER dB knob law | works |
 | 0.2 | SysEx debug port: live DSP coefficient writes | works |
-| 0.3 | 16 factory presets kept (A1-1..A2-8, a factory reset repeats them), frees 12.7 KB for new code | works |
+| 0.3 | 16 factory presets kept, frees 12.7 KB for new code | works |
 | 0.4 | debug port: memory read/write | built |
 | 0.5 | boot dragon | works |
 | 0.6 | first PEDAL/RIG menu | failed (wrong key, wrong buffer map), replaced by 0.7 |
 | 0.7 | PEDAL/RIG through the firmware's own setters | burned |
 | 0.8 | rack as one pedal: real knobs, boots into the pedal | works |
-| 0.9 | BOARD mode, 9 new pedals, A/B/Y box | emulation PASS, hardware next |
+| 0.9 | BOARD mode, 9 new pedals, A/B/Y box | folded into 1.0 |
+| 1.0 | JSW ROSETTA OS v1: macro knobs, 6-knob screen, board memories, exp pedal per pedal, 16 new sounds, 1 factory preset | works |
+| 2.0 | every voicing redone from the original circuits in real units (Hz / dB / Q) | works |
+| 2.1 | level match: Funeral and the overdrives brought up to the fuzzes; settings survive voicing tweaks | burned, testing |
 
-Known: on one unit the LCD contrast comes up low on about 1 in 5 boots and is fine after a proper power cycle. The
-mod never writes the contrast setting; v0.9 re-sends it at the end of boot.
+On one unit the LCD contrast used to come up low on about 1 in 5 boots. The OS re-sends the contrast setting at the
+end of boot, which fixed it there.
 
 ## TODO
 
-- [ ] Hardware test of v0.9 board mode.
+- [ ] Hardware test of board mode and board memories.
 - [ ] Tune every voicing by ear into a real amp.
+- [ ] PC loader + USER 1-8 pedal slots in battery RAM (load new pedals over MIDI, no burn). Plan: `PC_TONE_APP.md`.
+- [ ] PC translator: existing tone formats (NAM captures, IRs, modeler presets) -> GP-16 settings.
 - [ ] Hold-to-repeat on the knob buttons.
-- [ ] Save boards to slots (now one live board).
 - [ ] Crack the TC23SC260 DSP instruction set: new algorithms, a real cab sim in place of the LINE OUT FILTER.
 
 ## Credits and legal

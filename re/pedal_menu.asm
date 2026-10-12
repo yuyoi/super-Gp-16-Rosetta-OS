@@ -1,19 +1,23 @@
-; GP-16 PEDAL / RIG / BOARD modes (v0.9): the rack as one pedal, or a whole pedalboard.
-; Lives at ROM 0x0A00 = E0A0:0000. Far functions, DS=FA00.
-;   E0A0:0000  SYSTEM key entry (main loop F6A1:012C: lcall F6A1:1530 -> here). Starts at the split screen.
-;   E0A0:0003  power-on entry (F6A1:0063: mov byte [a312],0 -> lcall here). Starts in the last mode.
+; JSW ROSETTA OS v1 -- GP-16 PEDAL / RIG / BOARD modes: the rack as one pedal, or a whole pedalboard.
+; Position independent (org 0, tables via CS); build_mod places it at ROM 0x0200 = E020:0000. Far functions, DS=FA00.
+;   +0  SYSTEM key entry (main loop F6A1:012C: lcall F6A1:1530 -> here). Starts at the split screen.
+;   +3  power-on entry (F6A1:0063: mov byte [a312],0 -> lcall here). Starts in the last mode.
 ; split:  FUNCTION UP -> PEDAL, DOWN -> RIG, EDIT -> BOARD, SYSTEM -> stock System menu, ESC -> patch screen.
 ; PEDAL pages: 0 knobs, 1 pick pedal.     RIG pages: 0 pedal knobs, 1 amp knobs, 2 pick pedal, 3 pick amp.
 ;   FUNCTION UP/DOWN = next/previous page. ESC = back to split. BANK/GROUP = dial -/+.
 ;   Knob page: buttons 1-4 = knob 1-4 up, 5-8 = knob 1-4 down; the dial follows the knob touched last ('*').
-; BOARD: 14 pages = 12 block slots (A1 COMP .. B6 AMP) + ORDER + OUT (A/B/Y box).
+;   5-6 knobs: names over numbers, 1-3 / 5-7 pick a knob (underline cursor), 4 = up, 8 = down, dial turns it.
+;   Mode-button pedals (Dimension C): buttons 1-4 = mode, the lit one again = off.
+;   Knobs are macros: one knob may drive several params, linearly or by a value table.
+; BOARD: 15 pages = 12 block slots (A1 COMP .. B6 AMP) + ORDER + OUT (A/B/Y box) + BOARD MEMORY (1-8 = load).
+;   WRITE on any board page = save the board to memory 1-8. The expression pedal goes to the first pedal that wants it.
 ;   FUNCTION = next/previous slot, BANK/GROUP = previous/next pedal for the slot, buttons + dial = its knobs.
 ;   A pedal sits in its home slot and grabs the extra blocks its voicing uses (Muff: comp + EQ, amps: EQ, Leslie: trem)
 ;   when those slots are empty; a grabbed slot shows <NAME> and can't take a pedal until that pedal changes.
-;   ORDER: buttons 1/5 = A chain preset, 2/6 = B chain preset. OUT: 1/5 = output channel (CH1 / CH2 / both).
+;   ORDER: buttons 1/5 = A chain preset (4), 2/6 = B chain preset (3). OUT: 1/5 = output channel (CH1 / CH2 / both).
 ; Knob moves are live (DT1 setter EE11:17F4 + the param's descriptor setter, as the stock edit menu does).
 ; Pedal/amp/board change = full apply through EE11:17F4, then the stock sound-change service.
-; (Older sources: pedal_menu_v07.asm, pedal_menu_v08.asm.)
+; (Older sources: pedal_menu_v07.asm, pedal_menu_v08.asm, pedal_menu_v09.asm.)
         cpu 186
         bits 16
         org 0
@@ -31,6 +35,7 @@ DT1SET   equ 0x17f4          ; (buf far, sysex addr, value): DT1 per-byte setter
 E93C_SEG equ 0xe93c
 CUR      equ 0x0238          ; cursor(col,line)  push col; push line
 PUTC     equ 0x0000          ; putc(ch)
+UCUR     equ 0x01ca          ; underline cursor: 1 on, 2 off ([9E82] bit 1)
 
 BUF      equ 0x9d06          ; internal edit buffer (114 B)
 BUF_NAME equ 0x9d67          ; +0x61, 16 chars (play screen shows it)
@@ -62,21 +67,34 @@ ST_ACT   equ 0xcf39          ; knob the dial follows
 ST_FP    equ 0xcf3a          ; far ptr scratch (4)
 ST_STATE equ 0xcf3e          ; 0 split, 1 pedal, 2 rig, 3 board
 ST_TMP   equ 0xcf3f
-ST_KP    equ 0xcf40          ; (NPED+1) x 4 knob positions (pedals)
-ST_KA    equ 0xce00          ; (NAMP+1) x 4 (amps)
 OWN      equ 0xce20          ; 12 B: BOARD owner slot per block (FF = none)
 ST_OACT  equ 0xce2c          ; ORDER page: 0 = A row active, 1 = B row
+ST_BTN   equ 0xce2d          ; button pressed (0-7)
+ST_WH    equ 0xce2e          ; which (0 pedal / 1 amp / 2 board) for the knob being edited
+ST_N     equ 0xce2f          ; knob count of that entry
+ST_SPTR  equ 0xce30          ; word: its knob store
+ST_DEPS  equ 0xce32          ; knobs to re-apply after a live move
+ST_SAVE  equ 0xce33          ; 1 = "save board to 1-8" prompt
+ST_EXPW  equ 0xce34          ; BOARD: slot that owns the expression pedal (FF = none yet)
+ST_DIR   equ 0xce35          ; +1 / -1
+ST_LMEM  equ 0xce36          ; board memory loaded / saved last (FF = none)
+ST_MPTR  equ 0xce38          ; word: board memory pointer
+                             ; knob stores: KS_BASE.. (per entry, address in the table); no stock refs in DS A800-CDFF
+BMEM     equ 0xb400          ; 8 board memories
+BMSZ     equ 96              ; KMAGIC, BRD[12], ORDA, ORDB, OUTSEL, knob positions 12 x 6
 
 K_BANK   equ 0x09
 K_GROUP  equ 0x0a
+K_WRITE  equ 0x0b
 K_EDIT   equ 0x0c
 K_ESC    equ 0x0d
 K_SYS    equ 0x0e
 K_UP     equ 0x0f            ; FUNCTION (stock page step: 0xF = next, 0x10 = previous)
 K_DN     equ 0x10
 K_CLR    equ 0xff
-KREC     equ 22              ; knob record size
-NSLOT    equ 14              ; BOARD pages
+NSLOT    equ 15              ; BOARD pages
+NORDA    equ 4               ; A chain presets
+D_MODE   equ 5               ; knob disp: mode buttons
 
 %macro farcall 2
         db 0x9a
@@ -114,7 +132,10 @@ mloop:
 .svc:   push ax
         farcall F6A1_SEG, SERVICE
         add sp, 2
-        mov ax, K_ESC
+        cmp byte [ST_SAVE], 0
+        je .nsv
+        jmp .save
+.nsv:   mov ax, K_ESC
         call keyt
         jz .noesc
         cmp byte [ST_STATE], 0
@@ -156,9 +177,11 @@ mloop:
 .s4:    call eat_numbers
         jmp mloop
 
-.mode:  mov ax, K_SYS                ; ---- pedal / rig (SYSTEM/EDIT do nothing here; eat them)
+.mode:  mov ax, K_SYS                ; ---- pedal / rig (SYSTEM/EDIT/WRITE do nothing here; eat them)
         call keyt
         mov ax, K_EDIT
+        call keyt
+        mov ax, K_WRITE
         call keyt
         mov ax, K_UP
         call keyt
@@ -181,7 +204,13 @@ mloop:
         call keyt
         mov ax, K_EDIT
         call keyt
-        mov ax, K_UP
+        mov ax, K_WRITE
+        call keyt
+        jz .b0
+        mov byte [ST_SAVE], 1        ; WRITE -> "save board to 1-8"
+        call redraw
+        jmp mloop
+.b0:    mov ax, K_UP
         call keyt
         jz .b1
         mov al, 1
@@ -210,7 +239,32 @@ mloop:
         call board_dial
 .bx:    jmp mloop
 
-.exit:  mov ax, K_CLR                ; drop queued presses so nothing reaches the patch keys
+.save:  mov ax, K_ESC                ; ---- save prompt: 1-8 = memory, ESC = cancel
+        call keyt
+        jnz .sv_x
+        mov si, 1
+.sv_n:  mov ax, si
+        call keyt
+        jnz .sv_do
+        inc si
+        cmp si, 8
+        jbe .sv_n
+        jmp mloop
+.sv_do: mov ax, si
+        dec ax
+        mov [ST_LMEM], al
+        call mem_save
+        mov byte [ST_PAGE], 14       ; show BOARD MEMORY with the new board
+        mov byte [ST_VIEW], 0
+.sv_x:  mov byte [ST_SAVE], 0
+        mov ax, K_CLR
+        call keyt
+        call sync_dial
+        call redraw
+        jmp mloop
+
+.exit:  call cur_off
+        mov ax, K_CLR                ; drop queued presses so nothing reaches the patch keys
         call keyt
         and byte [MENUFLG], 0xfe
         pop di
@@ -264,7 +318,17 @@ validate:
         cmp al, 3
         jbe .v4
 .v3:    mov byte [ST_MODE], 1
-.v4:    cmp byte [ORDA], 2
+.v4:    call board_check
+        mov byte [ST_ACT], 0
+        mov byte [ST_VIEW], 0
+        mov byte [ST_OACT], 0
+        mov byte [ST_SAVE], 0
+        mov byte [ST_FILT], 0xff
+        mov byte [ST_LMEM], 0xff
+        jmp compute_owners
+
+board_check:                         ; BRD / ORDA / ORDB / OUTSEL in range (after a reset or a memory load)
+        cmp byte [ORDA], NORDA-1
         jbe .v5
         mov byte [ORDA], 0
 .v5:    cmp byte [ORDB], 2
@@ -295,28 +359,30 @@ validate:
 .bn:    inc bx
         cmp bx, 12
         jb .bs
-        mov byte [ST_ACT], 0
-        mov byte [ST_VIEW], 0
-        mov byte [ST_OACT], 0
-        mov byte [ST_FILT], 0xff
-        jmp compute_owners
+        ret
 
 knobs_reset:                         ; every store <- its table defaults
         mov si, ped_off
-        mov di, ST_KP
         mov cx, NPED+1
         call .tab
         mov si, amp_off
-        mov di, ST_KA
         mov cx, NAMP+1
-.tab:   mov bx, [cs:si]
-        mov bx, [cs:bx+16]           ; knob block: n, def0..3
-        mov ax, [cs:bx+1]
-        mov [di], ax
-        mov ax, [cs:bx+3]
-        mov [di+2], ax
+.tab:   push cx
+        push si
+        mov si, [cs:si]              ; entry
+        mov bx, [cs:si+16]           ; knob block: n, def[n]
+        mov di, [cs:si+20]           ; its store
+        mov cl, [cs:bx]
+        mov ch, 0
+        jcxz .n
+.c:     inc bx
+        mov al, [cs:bx]
+        mov [di], al
+        inc di
+        loop .c
+.n:     pop si
+        pop cx
         add si, 2
-        add di, 4
         loop .tab
         ret
 
@@ -324,7 +390,8 @@ to_split:
         mov ax, K_CLR
         call keyt
         mov byte [ST_STATE], 0
-        jmp draw_split
+        mov byte [ST_SAVE], 0
+        jmp redraw
 
 enter_mode:                          ; al = 1 pedal / 2 rig / 3 board
         mov [ST_STATE], al
@@ -415,24 +482,20 @@ ent_ptr:                             ; bl = 0 pedal / 1 amp / 2 board -> si = en
         jnz .a
         mov al, [ST_PED]
 .ped:   mov ah, 0
-        mov di, ax
-        shl di, 2
-        add di, ST_KP
         mov si, ax
         shl si, 1
         mov si, [cs:ped_off+si]
+        mov di, [cs:si+20]
         ret
 .a:     xor ax, ax                   ; amp counts only in RIG mode
         cmp byte [ST_STATE], 2
         jne .amp
         mov al, [ST_AMP]
 .amp:   mov ah, 0
-        mov di, ax
-        shl di, 2
-        add di, ST_KA
         mov si, ax
         shl si, 1
         mov si, [cs:amp_off+si]
+        mov di, [cs:si+20]
         ret
 .brd:   mov al, [ST_PAGE]            ; board: the pedal acting on this slot (its own, or the one that grabbed it)
         cmp al, 12
@@ -455,17 +518,14 @@ ent_ptr:                             ; bl = 0 pedal / 1 amp / 2 board -> si = en
 
 ent_slot:                            ; bl = board slot, al = index -> si = entry, di = knob store (bx kept)
         mov ah, 0
-        mov di, ax
-        shl di, 2
         mov si, ax
         shl si, 1
         cmp bl, 11
         je .a
-        add di, ST_KP
         mov si, [cs:ped_off+si]
-        ret
-.a:     add di, ST_KA
-        mov si, [cs:amp_off+si]
+        jmp .s
+.a:     mov si, [cs:amp_off+si]
+.s:     mov di, [cs:si+20]
         ret
 
 nknobs:                              ; si = entry -> al = knob count (bx clobbered)
@@ -473,12 +533,24 @@ nknobs:                              ; si = entry -> al = knob count (bx clobber
         mov al, [cs:bx]
         ret
 
-knob_rec:                            ; si = entry, al = knob idx -> bx = record (cs)
-        mov ah, KREC
-        mul ah
+knob_rec:                            ; si = entry, al = knob idx -> bx = record (cs). ax, cx kept.
+        push cx                      ; record: rlen, label[3], steps, disp, ntg, deps, targets
+        push ax
         mov bx, [cs:si+16]
+        mov cl, [cs:bx]
+        mov ch, 0
+        add bx, cx
+        inc bx                       ; skip n + defaults
+        pop ax
+        push ax
+        mov cl, al
+        jcxz .d
+.l:     mov al, [cs:bx]
+        mov ah, 0
         add bx, ax
-        add bx, 5
+        loop .l
+.d:     pop ax
+        pop cx
         ret
 
 knob_apply:                          ; bl = which, al = knob idx, dl = 1 live / 0 buffer only (si/di kept)
@@ -497,35 +569,43 @@ knob_core:                           ; si = entry, di = store, al = idx, dl = li
         push di
         push bp
         mov bp, sp
-        sub sp, 12                   ; -2 k, -4 steps, -6 targets left, -8 live, -10 target ptr, -12 value
+        sub sp, 14                   ; -2 k, -4 steps, -6 targets left, -8 live, -10 target, -12 value, -14 ainfo
         mov [bp-8], dl
         mov cl, al
         mov ch, 0
         add di, cx
         call knob_rec
         mov cl, [di]
-        cmp cl, [cs:bx+3]
+        cmp cl, [cs:bx+4]
         jbe .kok
-        mov cl, [cs:bx+3]
+        mov cl, [cs:bx+4]
         mov [di], cl
 .kok:   mov ch, 0
         mov [bp-2], cx
-        mov al, [cs:bx+3]
+        mov al, [cs:bx+4]
         mov ah, 0
         mov [bp-4], ax
-        mov al, [cs:bx+5]
+        mov al, [cs:bx+6]
         mov [bp-6], ax
-        add bx, 6
+        add bx, 8
         mov [bp-10], bx
 .t:     cmp word [bp-6], 0
         jne .t1
         jmp .done
 .t1:    mov bx, [bp-10]
-        mov al, [ST_FILT]            ; BOARD: skip targets in blocks this pedal doesn't own
+        mov al, [cs:bx]
+        and al, 0x7f
+        sub al, 0x0c
+        mov ah, 3
+        mul ah
+        add ax, ainfo
+        mov [bp-14], ax
+        mov si, ax
+        mov al, [ST_FILT]            ; BOARD: skip targets in blocks this pedal does not own
         cmp al, 0xff
         je .use
-        mov ah, [cs:bx+3]
-        shr ah, 4
+        mov ah, [cs:si]
+        and ah, 0x0f
         cmp ah, 0x0f
         je .use
         mov bl, ah
@@ -534,14 +614,38 @@ knob_core:                           ; si = entry, di = store, al = idx, dl = li
         je .use
         jmp .next
 .use:   mov bx, [bp-10]
-        mov ax, [cs:bx+6]            ; v = v0 + (v10 - v0) * k / steps
-        sub ax, [cs:bx+4]
+        test byte [cs:bx], 0x80
+        jz .lin
+        mov si, [bp-2]               ; table: value per step, FF = leave alone
+        mov al, [cs:bx+si+1]
+        mov ah, 0
+        cmp al, 0xff
+        jne .have
+        jmp .next
+.lin:   test byte [cs:si], 0x10      ; v = v0 + (v10 - v0) * k / steps
+        jz .lb
+        mov ax, [cs:bx+3]            ; 2-byte param: word v0 / v10
+        sub ax, [cs:bx+1]
         imul word [bp-2]
         idiv word [bp-4]
         mov bx, [bp-10]
-        add ax, [cs:bx+4]
-        mov [bp-12], ax
-        test byte [cs:bx+3], 1
+        add ax, [cs:bx+1]
+        jmp .have
+.lb:    mov al, [cs:bx+2]
+        mov ah, 0
+        mov cl, [cs:bx+1]
+        mov ch, 0
+        sub ax, cx
+        imul word [bp-2]
+        idiv word [bp-4]
+        mov bx, [bp-10]
+        mov cl, [cs:bx+1]
+        mov ch, 0
+        add ax, cx
+.have:  mov [bp-12], ax
+        mov bx, [bp-10]
+        mov si, [bp-14]
+        test byte [cs:si], 0x10
         jz .one
         shr ax, 7                    ; 2-byte SysEx: msb, then lsb
         mov bl, [cs:bx]
@@ -554,25 +658,37 @@ knob_core:                           ; si = entry, di = store, al = idx, dl = li
         call dt1set
         jmp .live
 .one:   mov bl, [cs:bx]
+        and bl, 0x7f
         call dt1set
 .live:  cmp byte [bp-8], 0
         je .next
-        mov bx, [bp-10]
-        mov al, [cs:bx+1]            ; p
+        mov si, [bp-14]
+        mov al, [cs:si+1]            ; p
         cmp al, 0xff
         je .next
         cmp al, [EXPASG]
         je .next                     ; the expression pedal owns this param
-        mov cl, [cs:bx+2]            ; internal value from the buffer (the setters take internal units)
+        mov cl, [cs:si+2]            ; internal value from the buffer (the setters take internal units)
         mov ch, 0
-        mov si, cx
-        test byte [cs:bx+3], 2
+        mov bx, cx
+        test byte [cs:si], 0x20
         jz .ib
-        mov cx, [si+BUF]
+        mov cx, [bx+BUF]
         jmp .iv
-.ib:    mov cl, [si+BUF]
+.ib:    mov cl, [bx+BUF]
 .iv:    call live_set
-.next:  add word [bp-10], 8
+.next:  mov bx, [bp-10]              ; next target
+        test byte [cs:bx], 0x80
+        jz .nl
+        mov ax, [bp-4]
+        add ax, 2                    ; addr + steps+1 values
+        jmp .adv
+.nl:    mov si, [bp-14]
+        mov ax, 3
+        test byte [cs:si], 0x10
+        jz .adv
+        mov ax, 5
+.adv:   add [bp-10], ax
         dec word [bp-6]
         jmp .t
 .done:  mov sp, bp
@@ -600,29 +716,65 @@ live_set:                            ; al = param p, cx = internal value -> desc
         and byte [es:TMIC], 0xbf
         ret
 
-knobs_all:                           ; bl = which (0/1): every knob -> buffer (no live setters)
+knobs_all:                           ; bl = which (0/1): every knob -> buffer (no live setters), in order
         push si
         push bx
         call ent_ptr
         call nknobs
         pop bx
         mov ah, 0
-        mov si, ax
-.l:     dec si
-        js .d
+        mov cx, ax
+        xor si, si
+.l:     cmp si, cx
+        jae .d
+        push cx
+        push bx
         mov ax, si
         mov dl, 0
-        push bx
         call knob_apply
         pop bx
+        pop cx
+        inc si
         jmp .l
 .d:     pop si
         ret
 
+set_knob:                            ; cl = knob idx, al = new k; si = entry, di = store, [ST_WH], [ST_N] set.
+        mov ch, 0                    ; stores it and re-applies it live with every knob sharing a param. ZF = no change
+        mov bx, di
+        add bx, cx
+        cmp al, [bx]
+        je .same
+        mov [bx], al
+        mov al, cl
+        call knob_rec
+        mov al, [cs:bx+7]            ; deps (includes itself)
+        mov [ST_DEPS], al
+        xor cx, cx
+.l:     cmp cl, [ST_N]
+        jae .d
+        mov al, [ST_DEPS]
+        shr al, cl
+        test al, 1
+        jz .n
+        push cx
+        mov al, cl
+        mov dl, 1
+        mov bl, [ST_WH]
+        call knob_apply              ; keeps si/di
+        pop cx
+.n:     inc cx
+        jmp .l
+.d:     or al, 1                     ; ZF = 0
+        ret
+.same:  xor al, al                   ; ZF = 1
+        ret
+
 knob_press:                          ; ax = button 1..8
         dec ax
+        mov [ST_BTN], al
         mov cl, al
-        and cl, 3                    ; column = knob
+        and cl, 3                    ; column
         mov ch, 1
         cmp al, 4
         jb .up
@@ -633,10 +785,14 @@ knob_press:                          ; ax = button 1..8
         cmp al, 12
         jb .bk
         je .ord
+        cmp al, 14
+        jae .mem
         test cl, cl                  ; OUT page: column 1 only
         jnz .ret
         mov al, ch
         jmp out_change
+.mem:   mov al, [ST_BTN]             ; BOARD MEMORY: 1-8 = load
+        jmp mem_load
 .ord:   cmp cl, 2                    ; ORDER page: column 1 = A, column 2 = B
         jae .ret
         mov [ST_OACT], cl
@@ -644,10 +800,8 @@ knob_press:                          ; ax = button 1..8
         jmp order_change
 .ret:   ret
 .bk:    mov byte [ST_VIEW], 1        ; board slot: show its knobs
-        push cx
         jmp .kp
-.nb:    push cx
-        call page_which
+.nb:    call page_which
         test bh, bh
         jnz .kp                      ; on a pick page: jump to that thing's knob page
         mov al, bl
@@ -656,34 +810,77 @@ knob_press:                          ; ax = button 1..8
         mov al, 0
 .rg:    mov [ST_PAGE], al
 .kp:    call page_which
-        push bx
-        call ent_ptr
+        mov [ST_WH], bl
+        call ent_ptr                 ; si = entry, di = store
         call nknobs
-        pop bx                       ; bl = which
-        pop cx                       ; cl = knob, ch = +1/-1
-        cmp cl, al
-        jae .redr                    ; no such knob on this pedal
-        mov [ST_ACT], cl
-        mov al, cl
-        mov ah, 0
-        add di, ax
-        push bx
+        mov [ST_N], al
+        test al, al
+        jnz .k0
+        jmp .redr                    ; no knobs on this pedal
+.k0:    xor ax, ax
         call knob_rec
-        mov al, [di]
-        add al, ch
-        js .lo                       ; below 0
-        cmp al, [cs:bx+3]
+        cmp byte [cs:bx+5], D_MODE
+        je .mode
+        cmp byte [ST_N], 5
+        jae .six
+        mov al, [ST_BTN]             ; 4 knobs: column = knob, top row up, bottom row down
+        mov cl, al
+        and cl, 3
+        mov ch, 1
+        cmp al, 4
+        jb .dir
+        mov ch, -1
+.dir:   cmp cl, [ST_N]
+        jae .redr
+        mov [ST_ACT], cl
+        mov [ST_DIR], ch
+        jmp .step
+.six:   mov al, [ST_BTN]             ; 5-6 knobs: 1-3 / 5-7 pick, 4 up, 8 down
+        mov byte [ST_DIR], 1
+        cmp al, 3
+        je .s_st
+        mov byte [ST_DIR], -1
+        cmp al, 7
+        je .s_st
+        cmp al, 4
+        jb .s_pk
+        dec al                       ; 5-7 -> knobs 4-6
+.s_pk:  cmp al, [ST_N]
+        jae .redr
+        mov [ST_ACT], al
+        jmp .redr
+.s_st:  mov al, [ST_ACT]
+        cmp al, [ST_N]
+        jae .redr
+.step:  mov al, [ST_ACT]
+        call knob_rec                ; bx = record
+        mov cl, [ST_ACT]
+        mov ch, 0
+        push bx
+        mov bx, di
+        add bx, cx
+        mov al, [bx]
+        pop bx
+        add al, [ST_DIR]
+        js .lo
+        cmp al, [cs:bx+4]
         jbe .st
-        mov al, [cs:bx+3]
+        mov al, [cs:bx+4]
         jmp .st
 .lo:    xor al, al
-.st:    pop bx
+.st:    mov cl, [ST_ACT]
+        call set_knob
+        jmp .redr
+.mode:  mov al, [ST_BTN]             ; mode buttons: 1-4 = mode, the lit one again = off
+        cmp al, 4
+        jae .redr
+        inc al
         cmp al, [di]
-        je .redr
-        mov [di], al
-        mov al, [ST_ACT]
-        mov dl, 1
-        call knob_apply
+        jne .m1
+        xor al, al
+.m1:    mov byte [ST_ACT], 0
+        xor cl, cl
+        call set_knob
 .redr:  call sync_dial
         jmp redraw
 
@@ -705,23 +902,17 @@ dial_check:                          ; PEDAL / RIG
 .r:     ret
 
 dial_knob:                           ; bl = which: dial -> the active knob
-        push bx
+        mov [ST_WH], bl
         call ent_ptr
         call nknobs
-        pop bx
+        mov [ST_N], al
         cmp [ST_ACT], al
         jae .r
-        mov al, [ST_ACT]
-        mov ah, 0
-        add di, ax
         mov ax, [DIAL]
-        cmp al, [di]
-        je .r
-        mov [di], al
+        mov cl, [ST_ACT]
+        call set_knob
+        jz .r
         mov byte [ST_VIEW], 1
-        mov al, [ST_ACT]
-        mov dl, 1
-        call knob_apply
         jmp redraw
 .r:     ret
 
@@ -730,6 +921,8 @@ board_dial:
         mov al, [ST_PAGE]
         cmp al, 12
         jb .k
+        cmp al, 14
+        jae .r                       ; BOARD MEMORY: buttons only
         mov si, OUTSEL
         ja .s
         mov si, ORDA
@@ -751,7 +944,9 @@ board_pick:                          ; al = -1 / +1 (BANK / GROUP)
         cmp ah, 12
         jb .slot
         je order_change
-        jmp out_change
+        cmp ah, 13
+        je out_change
+        ret
 .slot:  mov dl, al                   ; dir
         mov bl, ah
         mov bh, 0
@@ -799,20 +994,55 @@ board_pick:                          ; al = -1 / +1 (BANK / GROUP)
         call sync_dial
         jmp redraw
 
-order_change:                        ; al = -1 / +1 on the active chain preset (A or B)
+write_order:                         ; al = A preset, ah = B preset -> SysEx 0..4 (A) and 6..10 (B)
+        push ax
+        mov ah, 5
+        mul ah
+        mov si, ax
+        add si, orda_t
+        xor bx, bx
+.oa:    mov al, [cs:bx+si]
+        push bx
+        call dt1set
+        pop bx
+        inc bx
+        cmp bx, 5
+        jb .oa
+        pop ax
+        mov al, ah
+        mov ah, 5
+        mul ah
+        mov si, ax
+        add si, ordb_t
+        xor bx, bx
+.ob:    mov al, [cs:bx+si]
+        push bx
+        add bl, 6
+        call dt1set
+        pop bx
+        inc bx
+        cmp bx, 5
+        jb .ob
+        ret
+
+order_change:                        ; al = -1 / +1 on the active chain preset (A: 4, B: 3)
         mov si, ORDA
+        mov cl, NORDA
         cmp byte [ST_OACT], 0
-        je cyc3
+        je cycn
         mov si, ORDB
-        jmp cyc3
+        mov cl, 3
+        jmp cycn
 out_change:                          ; al = -1 / +1 on the output channel
         mov si, OUTSEL
-cyc3:                                ; [si] = ([si] + al) mod 3, then rebuild the board
+        mov cl, 3
+cycn:                                ; [si] = ([si] + al) mod cl, then rebuild the board
         add al, [si]
         cmp al, 0x80
         jb .a
-        mov al, 2
-.a:     cmp al, 3
+        mov al, cl
+        dec al
+.a:     cmp al, cl
         jb .b
         xor al, al
 .b:     mov [si], al
@@ -852,6 +1082,10 @@ compute_owners:                      ; OWN[b] = slot whose pedal drives block b 
 
 board_apply:                         ; whole board -> edit buffer -> sound change
         call compute_owners
+        mov byte [ST_EXPW], 0xff     ; expression pedal: unassigned until a pedal claims it
+        mov bl, 0x5c
+        mov al, 127
+        call dt1set
         xor bx, bx                   ; on bits = blocks that have an owner
         mov dx, 1
         xor cx, cx
@@ -881,10 +1115,10 @@ board_apply:                         ; whole board -> edit buffer -> sound chang
         pop di
         pop si
         call nknobs                  ; al = count (bx clobbered)
-        mov ah, 0
-        mov cx, ax
-.k:     jcxz .kd
-        dec cx
+        mov [ST_N], al
+        xor cx, cx                   ; knobs in order (later ones override shared params)
+.k:     cmp cl, [ST_N]
+        jae .kd
         push cx
         push si
         push di
@@ -894,39 +1128,16 @@ board_apply:                         ; whole board -> edit buffer -> sound chang
         pop di
         pop si
         pop cx
+        inc cx
         jmp .k
 .kd:    pop bx
 .sn:    inc bx
         cmp bx, 12
         jb .s
         mov byte [ST_FILT], 0xff
-        mov al, [ORDA]               ; chain order presets: SysEx 0..4 (A) and 6..10 (B)
-        mov ah, 5
-        mul ah
-        mov si, ax
-        add si, orda_t
-        xor bx, bx
-.oa:    mov al, [cs:bx+si]
-        push bx
-        call dt1set
-        pop bx
-        inc bx
-        cmp bx, 5
-        jb .oa
-        mov al, [ORDB]
-        mov ah, 5
-        mul ah
-        mov si, ax
-        add si, ordb_t
-        xor bx, bx
-.ob:    mov al, [cs:bx+si]
-        push bx
-        add bl, 6
-        call dt1set
-        pop bx
-        inc bx
-        cmp bx, 5
-        jb .ob
+        mov al, [ORDA]
+        mov ah, [ORDB]
+        call write_order
         mov bl, 0x63                 ; output channel = the A/B/Y box
         mov al, [OUTSEL]
         call dt1set
@@ -935,7 +1146,7 @@ board_apply:                         ; whole board -> edit buffer -> sound chang
         jmp name_snd
 
 board_pairs:                         ; cs:si -> entry; writes the pairs in blocks owned by slot [ST_FILT]
-        add si, 20
+        add si, 22
         mov cl, [cs:si]
         mov ch, 0
         inc si
@@ -945,7 +1156,7 @@ board_pairs:                         ; cs:si -> entry; writes the pairs in block
         mov al, [cs:si+1]
         add si, 2
         cmp bl, 0x0c
-        jb .blk
+        jb .nx                       ; a pedal's own chain order: the ORDER page decides on the board
         cmp bl, 0x0e
         ja .blk
         mov ah, [ST_FILT]
@@ -962,11 +1173,16 @@ board_pairs:                         ; cs:si -> entry; writes the pairs in block
         jne .nx
         mov [ST_ON], al
         jmp .nx
-.blk:   mov bh, 0
-        mov dl, al
-        mov al, [cs:bx+blk_of-0x0c]
-        cmp al, 0x0f                 ; global (exp pedal) params: always
-        je .set
+.blk:   mov dl, al
+        mov al, bl
+        sub al, 0x0c
+        mov ah, 3
+        mul ah
+        mov di, ax
+        mov al, [cs:di+ainfo]
+        and al, 0x0f
+        cmp al, 0x0f                 ; global (exp pedal) params: the first pedal in the chain that has them
+        je .glob
         mov ah, 0
         mov di, ax
         mov al, [di+OWN]
@@ -977,6 +1193,14 @@ board_pairs:                         ; cs:si -> entry; writes the pairs in block
 .nx:    pop cx
         loop .p
 .done:  ret
+.glob:  mov al, [ST_EXPW]
+        cmp al, 0xff
+        je .gown
+        cmp al, [ST_FILT]
+        jne .nx
+.gown:  mov al, [ST_FILT]
+        mov [ST_EXPW], al
+        jmp .set
 
 ; ---------------------------------------------------------------- apply (PEDAL / RIG)
 apply_cur:
@@ -987,6 +1211,15 @@ apply_cur:
         jne apply
         mov dl, [ST_AMP]
 apply:                               ; ax = pedal idx, dx = amp idx
+        push dx
+        push ax
+        mov bl, 0x5c                 ; expression pedal unassigned unless the pedal claims it
+        mov al, 127
+        call dt1set
+        xor ax, ax                   ; default chain WAH>DIRT / stock B; a pedal may bring its own (Funeral)
+        call write_order
+        pop ax
+        pop dx
         push dx
         push ax
         mov byte [ST_ON], 0          ; all blocks off, then OR in each entry's blocks
@@ -1058,8 +1291,8 @@ write_on:                            ; block type + on/off (firmware packs them 
         mov al, [ST_ON+2]
         jmp dt1set
 
-apply_entry:                         ; cs:si -> entry (name16, kptr, extras, count, count x (sysex addr, value))
-        add si, 20
+apply_entry:                         ; cs:si -> entry (name16, kptr, extras, kstore, count, count x (sysex addr, value))
+        add si, 22
         mov cl, [cs:si]
         mov ch, 0
         inc si
@@ -1108,15 +1341,18 @@ sync_dial:                           ; point the dial at what the current page e
         mov al, [ST_PAGE]
         cmp al, 12
         jb .knob2
+        cmp al, 14
+        jae .none
         mov si, OUTSEL
         ja .set3
         mov si, ORDA
+        mov cx, NORDA-1
         cmp byte [ST_OACT], 0
-        je .set3
+        je .set4
         mov si, ORDB
-.set3:  mov al, [si]
+.set3:  mov cx, 2
+.set4:  mov al, [si]
         mov ah, 0
-        mov cx, 2
         mov dl, 1
         jmp dial_set
 .knob2: mov bl, 2
@@ -1137,7 +1373,7 @@ sync_dial:                           ; point the dial at what the current page e
         call knob_rec
         mov al, [di]
         mov ah, 0
-        mov cl, [cs:bx+3]
+        mov cl, [cs:bx+4]
         mov ch, 0
         mov dl, 0
         jmp dial_set
@@ -1162,7 +1398,11 @@ dial_set:                            ; ax = value, cx = max, dl = wrap
 
 ; ---------------------------------------------------------------- screens
 redraw:
-        mov al, [ST_STATE]
+        call cur_off                 ; only the 6-knob screen shows the underline cursor
+        cmp byte [ST_SAVE], 0
+        je .r0
+        jmp draw_saveq
+.r0:    mov al, [ST_STATE]
         test al, al
         jnz .r1
         jmp draw_split
@@ -1256,8 +1496,12 @@ draw_rig:                            ; RIG pick pages: bl = 0 pedal row active /
 board_redraw:
         mov al, [ST_PAGE]
         cmp al, 12
+        jb .slot
         je draw_order
-        ja draw_out
+        cmp al, 13
+        je draw_out
+        jmp draw_mem
+.slot:
         cmp byte [ST_VIEW], 0
         je draw_slot
         mov bl, 2
@@ -1327,7 +1571,7 @@ draw_order:
         call cursor
         mov al, 'B'
         mov ah, [ORDB]
-        add ah, 3
+        add ah, NORDA
         mov dl, 1
 ord_row:                             ; al = 'A'/'B', ah = name index, dl = row id ('>' if active)
         push ax
@@ -1366,15 +1610,12 @@ draw_out:
         mov cx, 16
         jmp puts
 
-draw_knobs:                          ; bl = which. Row 1 labels (+'*' on the dial's knob), row 2 values.
-        push bp
-        mov bp, sp
-        sub sp, 4                    ; -2 knob count, -4 store ptr
+draw_knobs:                          ; bl = which. 1-4 knobs: labels + values; 5-6: names over numbers; modes
+        mov [ST_WH], bl
         call ent_ptr
+        mov [ST_SPTR], di
         call nknobs
-        mov ah, 0
-        mov [bp-2], ax
-        mov [bp-4], di
+        mov [ST_N], al
         test al, al
         jnz .has
         xor ax, ax                   ; no knobs (OFF): name + hint
@@ -1387,24 +1628,30 @@ draw_knobs:                          ; bl = which. Row 1 labels (+'*' on the dia
         call cursor
         mov si, s_noknob
         mov cx, 16
-        call puts
-        mov sp, bp
-        pop bp
-        ret
-.has:   push si                      ; entry
+        jmp puts
+.has:   xor ax, ax
+        call knob_rec
+        cmp byte [cs:bx+5], D_MODE
+        jne .nm
+        jmp draw_modes
+.nm:    cmp byte [ST_N], 5
+        jb draw_four
+        jmp draw_six
+
+draw_four:                           ; row 1 labels (+'*' on the dial's knob), row 2 values
         xor ax, ax
         mov cx, 1
         call cursor
         xor di, di                   ; di = knob idx (survives far calls)
-.l1:    cmp di, [bp-2]
+.l1:    mov ax, di
+        cmp al, [ST_N]
         jae .b1
-        mov ax, di
         call knob_rec
-        mov al, [cs:bx]
-        call putc
         mov al, [cs:bx+1]
         call putc
         mov al, [cs:bx+2]
+        call putc
+        mov al, [cs:bx+3]
         call putc
         mov al, ' '
         mov dx, di
@@ -1421,13 +1668,13 @@ draw_knobs:                          ; bl = which. Row 1 labels (+'*' on the dia
         mov cx, 2
         call cursor
         xor di, di
-.l2:    cmp di, [bp-2]
+.l2:    mov ax, di
+        cmp al, [ST_N]
         jae .b2
-        mov ax, di
         call knob_rec
-        mov ah, [cs:bx+4]            ; disp
-        mov dl, [cs:bx+3]            ; steps
-        mov bx, [bp-4]
+        mov ah, [cs:bx+5]            ; disp
+        mov dl, [cs:bx+4]            ; steps
+        mov bx, [ST_SPTR]
         mov al, [bx+di]              ; k
         call put_val
         mov al, ' '
@@ -1437,11 +1684,151 @@ draw_knobs:                          ; bl = which. Row 1 labels (+'*' on the dia
 .n2:    inc di
         cmp di, 4
         jb .l2
-        pop si
-        mov sp, bp
-        pop bp
         ret
 
+draw_six:                            ; 5-6 knobs: 2-char names over 2-digit values, underline cursor on the active one
+        xor ax, ax
+        mov cx, 1
+        call cursor
+        call put16sp
+        xor ax, ax
+        mov cx, 2
+        call cursor
+        call put16sp
+        mov word [ST_FP], six_col    ; column table: 6 knobs (LO HM LM H  G  L) or 5 (evenly spaced)
+        cmp byte [ST_N], 6
+        je .t6
+        mov word [ST_FP], six_col5
+.t6:    xor di, di
+.l:     mov ax, di
+        cmp al, [ST_N]
+        jae .cur
+        mov bx, [ST_FP]
+        mov al, [cs:bx+di]
+        mov ah, 0
+        mov cx, 1
+        call cursor
+        mov ax, di
+        call knob_rec
+        mov al, [cs:bx+1]
+        call putc
+        mov al, [cs:bx+2]
+        call putc
+        mov bx, [ST_FP]
+        mov al, [cs:bx+di]
+        mov ah, 0
+        mov cx, 2
+        call cursor
+        mov bx, [ST_SPTR]
+        mov al, [bx+di]
+        cmp al, 10
+        jb .d1
+        mov al, '1'
+        call putc
+        mov al, '0'
+        jmp .d2
+.d1:    push ax
+        mov al, ' '
+        call putc
+        pop ax
+        add al, '0'
+.d2:    call putc
+        inc di
+        jmp .l
+.cur:   mov bl, [ST_ACT]
+        cmp bl, [ST_N]
+        jb .c1
+        mov bl, 0
+.c1:    mov bh, 0
+        add bx, [ST_FP]
+        mov al, [cs:bx]
+        inc al                       ; under the value's last digit
+        mov ah, 0
+        mov cx, 2
+        call cursor
+        mov ax, 1
+        jmp lcd_ucur
+six_col: db 0, 3, 6, 8, 11, 14       ; LO HM LM H  G  L
+six_col5: db 0, 3, 6, 9, 12          ; VL GT CP DR SB
+
+draw_modes:                          ; mode buttons: row 1 name, row 2 " 1   2  [3]  4  "
+        xor ax, ax
+        mov cx, 1
+        call cursor
+        mov cx, 16
+        call puts
+        xor ax, ax
+        mov cx, 2
+        call cursor
+        mov bx, [ST_SPTR]
+        mov dl, [bx]                 ; lit mode (0 = off)
+        mov dh, 1
+.l:     mov al, ' '
+        cmp dh, dl
+        jne .a
+        mov al, '['
+.a:     call putc
+        mov al, dh
+        add al, '0'
+        call putc
+        mov al, ' '
+        cmp dh, dl
+        jne .b
+        mov al, ']'
+.b:     call putc
+        mov al, ' '
+        call putc
+        inc dh
+        cmp dh, 4
+        jbe .l
+        ret
+
+draw_mem:                            ; BOARD MEMORY: " 1 2 - 4..." ('-' empty, '>' = loaded/saved last)
+        xor ax, ax
+        mov cx, 1
+        call cursor
+        mov si, s_slots + 14*16
+        mov cx, 16
+        call puts
+        xor ax, ax
+        mov cx, 2
+        call cursor
+        xor dx, dx
+        mov bx, BMEM
+.m:     mov al, ' '
+        cmp dl, [ST_LMEM]
+        jne .a
+        mov al, '>'
+.a:     call putc
+        mov al, '-'
+        cmp byte [bx], KMAGIC
+        jne .b
+        mov al, dl
+        add al, '1'
+.b:     call putc
+        add bx, BMSZ
+        inc dl
+        cmp dl, 8
+        jb .m
+        ret
+
+draw_saveq:
+        xor ax, ax
+        mov cx, 1
+        call cursor
+        mov si, s_saveq
+        mov cx, 16
+        call puts
+        xor ax, ax
+        mov cx, 2
+        call cursor
+        mov cx, 16
+        jmp puts                     ; puts left si at the second line
+
+put16sp:
+        call put4sp
+        call put4sp
+        call put4sp
 put4sp:
         mov al, ' '
         call putc
@@ -1450,7 +1837,24 @@ put4sp:
         jmp putc
 
 put_val:                             ; al = k, ah = disp, dl = steps -> 3 chars
-        cmp ah, 1
+        cmp ah, 3
+        jb .nsw
+        sub ah, 3                    ; 3 = OFF/ON, 4 = LO/HI
+        shl ah, 1
+        test al, al
+        jz .s0
+        inc ah
+.s0:    mov al, ah
+        mov ah, 3
+        mul ah
+        mov bx, ax
+        mov al, [cs:bx+s_sw]
+        call putc
+        mov al, [cs:bx+s_sw+1]
+        call putc
+        mov al, [cs:bx+s_sw+2]
+        jmp putc
+.nsw:   cmp ah, 1
         jne .sg
         add al, '1'                  ; 1-based int
         call putc
@@ -1505,7 +1909,94 @@ put_val:                             ; al = k, ah = disp, dl = steps -> 3 chars
         mov al, [ST_TMP]
         jmp putc
 
+; ---------------------------------------------------------------- board memories
+mem_save:                            ; al = memory 0-7 <- board + its pedals' knob positions
+        mov ah, BMSZ
+        mul ah
+        add ax, BMEM
+        mov [ST_MPTR], ax
+        mov di, ax
+        mov byte [di], KMAGIC
+        xor bx, bx
+.b:     mov al, [bx+BRD]             ; BRD[12], ORDA, ORDB, OUTSEL are contiguous
+        mov [bx+di+1], al
+        inc bx
+        cmp bx, 15
+        jb .b
+        xor bx, bx
+.s:     call mem_knobs
+        jcxz .n
+.c:     mov al, [si]
+        mov [di], al
+        inc si
+        inc di
+        loop .c
+.n:     inc bx
+        cmp bx, 12
+        jb .s
+        ret
+
+mem_load:                            ; al = memory 0-7 -> board (empty memory: nothing)
+        mov ah, BMSZ
+        mul ah
+        add ax, BMEM
+        mov [ST_MPTR], ax
+        mov si, ax
+        cmp byte [si], KMAGIC
+        jne .r
+        mov al, [ST_BTN]
+        mov [ST_LMEM], al
+        xor bx, bx
+.b:     mov al, [bx+si+1]
+        mov [bx+BRD], al
+        inc bx
+        cmp bx, 15
+        jb .b
+        call board_check
+        xor bx, bx
+.s:     call mem_knobs
+        xchg si, di                  ; memory -> store
+        jcxz .n
+.c:     mov al, [si]
+        mov [di], al
+        inc si
+        inc di
+        loop .c
+.n:     inc bx
+        cmp bx, 12
+        jb .s
+        mov byte [ST_ACT], 0
+        call board_apply
+        call sync_dial
+.r:     jmp redraw
+
+mem_knobs:                           ; bx = slot -> si = its pedal's knob store, di = its copy in [ST_MPTR], cx = count
+        push bx
+        mov al, [bx+BRD]
+        call ent_slot                ; si = entry, di = store
+        push di
+        call nknobs
+        mov ah, 0
+        mov cx, ax
+        pop si
+        pop bx
+        mov al, bl
+        mov ah, 6
+        mul ah
+        add ax, [ST_MPTR]
+        add ax, 16
+        mov di, ax
+        ret
+
 ; ---------------------------------------------------------------- helpers
+cur_off:                             ; LCD underline cursor off
+        mov ax, 2
+lcd_ucur:                            ; ax = 1 on / 2 off (E93C:01CA)
+        push ax
+        farcall E93C_SEG, UCUR
+        add sp, 2
+        ret
+
 cursor:                              ; ax = col, cx = line (bx/dx kept)
         push bx
         push dx
@@ -1556,8 +2047,12 @@ s_pedal:  db "PEDAL MODE      "
 s_noknob: db "NO KNOBS        "
 s_board:  db "PEDALBOARD      "
 s_out:    db "OUT             "
-s_ordn:   db "WAH>DIRT     ", "DIRT>WAH     ", "PHASE>DIRT   ", "STOCK        ", "TREM LAST    ", "REV>DELAY    "
+s_saveq:  db "SAVE BOARD TO   ", "1-8   ESC=CANCEL"
+s_sw:     db "OFFON LO HI "
+s_ordn:   db "WAH>DIRT     ", "DIRT>WAH     ", "PHASE>DIRT   ", "DIRT>WAH>COMP", "STOCK        ", "TREM LAST    "
+          db "REV>DELAY    "
 s_outn:   db "AMP 1  (CH1)    ", "AMP 2  (CH2)    ", "BOTH  (A/B/Y)   "
 orda_t:   db 0, 2, 1, 3, 4,  0, 1, 2, 3, 4,  0, 2, 3, 1, 4      ; COMP WAH DIRT PHAS EQ | stock | COMP WAH PHAS DIRT EQ
+          db 1, 2, 0, 3, 4                                     ; DIRT WAH COMP PHAS EQ (Funeral path: comp = loud amp)
 ordb_t:   db 6, 7, 8, 9, 10,  6, 7, 9, 10, 8,  6, 7, 8, 10, 9   ; stock | trem after reverb | reverb before delay
 %include "pedal_data.inc"

@@ -6,6 +6,9 @@ v0.3 = v0.2 + only 16 factory presets kept (reset repeats them), ROM 0x0720-0x38
 v0.4 = v0.3 + debug port v3: general memory read/write (cmds 05/06) for live button-map / jack-routing / LCD tests.
 v0.5 = boot dragon. v0.6 = PEDAL/RIG menu (buggy). v0.7 = menu on the real SYSTEM key + firmware DT1 setter apply.
 v0.8 = rack as one pedal: per-pedal knobs (buttons 1-4 up / 5-8 down, dial follows last knob), boots into it.
+v0.9 = BOARD mode. v2.0 = v1 + every voicing redone from the original circuits with real EQ Hz (firmware tables).
+v1.0 = JSW ROSETTA OS v1: macro knobs, 6-knob screen, board memories, 66 sounds; only 1 factory
+       preset kept, boot dragon moved to ROM 0x0080 (E008:0000) and the OS to ROM 0x0200 (E020:0000), 14 KB room.
 Writes <out_dir>/gp16_mod_v0_1.bin (128 KB) and gp16_mod_v0_1_sst512k.bin (4 copies, for SST39SF040).
 Every patch checks the original bytes first, so it refuses to patch the wrong ROM version.
 
@@ -19,7 +22,11 @@ import sys, os, math, hashlib
 
 STOCK_MD5 = 'ac5f56bcb3d8c30ddf3f1ffe88b13556'
 VERSION = sys.argv[3] if len(sys.argv) > 3 else '0.2'   # '0.1' rebuilds the first test image
-PRESETS_KEEP_END = 16 * 114          # 0x0720
+V1 = VERSION >= '1.0'
+PRESETS_KEEP = 1 if V1 else 16
+PRESETS_KEEP_END = PRESETS_KEEP * 114  # 0x0720 for 16
+DRAGON_ROM = 0x0080 if V1 else 0x0720  # paragraph aligned: segment E000 + ROM/16
+MENU_ROM = 0x0200 if V1 else 0x0A00
 PRESETS_END = 128 * 114              # 0x3900
 TABLE_ROM = 0x1FC00                # inside the 1 KB zero run 1FBBE-1FFEF
 TABLE_DS = TABLE_ROM - 0x1A000      # DS=FA00 -> offset 0x5C00
@@ -67,7 +74,12 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     patches = []
     # banner (v0.5 shortens line 2 to leave 3 cells for the boot dragon)
-    if VERSION >= '0.5':
+    if V1:
+        # boot line 1 "Guitar Processor" (only read by the boot banner, F6A1:0018) -> "JSW ROSETTA OS",
+        # line 2 -> version, both centred (the dragon eats both lines)
+        patches.append((0x1F671, b'Guitar Processor', b'JSW ROSETTA OS'.center(16)))
+        banner_new = ('v' + (VERSION[:-2] if VERSION.endswith('.0') else VERSION)).encode().center(16)
+    elif VERSION >= '0.5':
         banner_new = f'Super GP {VERSION}'.encode() + b'\x00   '
     else:
         banner_new = f'Super GP mod {VERSION}'.encode().ljust(16)[:16]
@@ -95,7 +107,7 @@ def main():
     if VERSION >= '0.3':
         for at, bpoff in ((0x13499, 0xFC), (0x1921E, 0xFE)):
             old = bytes([0x8B, 0x46, bpoff]) + bytes.fromhex('d1e08bd0d1e2d1e2d1e203c2d1e203c2d1e203c2')
-            new = bytes([0x8B, 0x46, bpoff]) + bytes.fromhex('250f00 6bc072'.replace(' ', ''))   # and ax,15; imul ax,ax,114
+            new = bytes([0x8B, 0x46, bpoff, 0x25, PRESETS_KEEP - 1, 0x00]) + bytes.fromhex('6bc072')  # and ax,N-1; imul ax,ax,114
             patches.append((at, old, new + b'\x90' * (len(old) - len(new))))
         patches.append((PRESETS_KEEP_END, rom[PRESETS_KEEP_END:PRESETS_END], b'\xff' * (PRESETS_END - PRESETS_KEEP_END)))
 
@@ -104,7 +116,7 @@ def main():
     # frame table are written after the patch loop (into the freed/zero regions).
     if VERSION >= '0.5':
         patches.append((0x16A30, bytes.fromhex('9a0000fcf2'),
-                        bytes([0x9a, 0x00, 0x00, 0x72, 0xe0])))   # lcall E072:0000
+                        bytes([0x9a, 0x00, 0x00]) + (0xE000 + DRAGON_ROM // 16).to_bytes(2, 'little')))   # lcall E072/E008:0000
         # kill the stock running-man boot walk (F6A1:0040 -> lcall F6A1:0156), leave the dragon only
         patches.append((0x16A50, bytes.fromhex('9a5601a1f6'), b'\x90' * 5))
     # v0.6/0.7: PEDAL/RIG menu at E0A0:0000 (ROM 0x0A00). Main loop SYSTEM key (key 0xE, F6A1:012C: lcall F6A1:1530)
@@ -112,12 +124,12 @@ def main():
     # (The burned v0.6 hooked F6A1:0106 = key 0xC = EDIT by mistake, and hand-mapped the buffer wrong; fixed in 0.7.)
     if VERSION >= '0.6':
         patches.append((0x16B3C, bytes.fromhex('9a3015a1f6'),
-                        bytes([0x9a, 0x00, 0x00, 0xa0, 0xe0])))   # lcall E0A0:0000
+                        bytes([0x9a, 0x00, 0x00]) + (0xE000 + MENU_ROM // 16).to_bytes(2, 'little')))   # lcall E0A0/E020:0000
     # v0.8: boot as the pedal. Main init F6A1:0063 `mov byte [a312],0` (runs once, right before the main loop)
     # -> lcall E0A0:0003, which redoes that store and enters the last PEDAL/RIG mode.
     if VERSION >= '0.8':
         patches.append((0x16A73, bytes.fromhex('c60612a300'),
-                        bytes([0x9a, 0x03, 0x00, 0xa0, 0xe0])))   # lcall E0A0:0003
+                        bytes([0x9a, 0x03, 0x00]) + (0xE000 + MENU_ROM // 16).to_bytes(2, 'little')))   # lcall E0A0/E020:0003
 
     for off, old, new in patches:
         assert len(old) == len(new), hex(off)
@@ -130,21 +142,22 @@ def main():
         code = open(os.path.join(here, 'dragon_boot.bin'), 'rb').read()
         tbl = open(os.path.join(here, 'dragon_frames.bin'), 'rb').read()
         assert len(tbl) == 192
-        at = 0x0720
+        at = DRAGON_ROM
+        assert at + len(code) <= MENU_ROM
         if set(rom[at:at + len(code)]) != {0xFF}:
             sys.exit('dragon routine region not free (need v0.3+ preset trim)')
         rom[at:at + len(code)] = code
         if set(rom[0x1FCCA:0x1FCCA + len(tbl)]) != {0x00}:
             sys.exit('dragon frame-table region not zero')
         rom[0x1FCCA:0x1FCCA + len(tbl)] = tbl
-        print(f'dragon routine {len(code)} B @00720, frame table 192 B @1FCCA')
+        print(f'dragon routine {len(code)} B @{at:05X}, frame table 192 B @1FCCA')
     if VERSION >= '0.6':
         menu = open(os.path.join(here, 'pedal_menu.bin'), 'rb').read()
-        at = 0x0A00
-        if set(rom[at:at + len(menu)]) != {0xFF}:
-            sys.exit('pedal menu region not free')
+        at = MENU_ROM
+        if at + len(menu) > PRESETS_END or set(rom[at:at + len(menu)]) != {0xFF}:
+            sys.exit(f'pedal menu ({len(menu)} B) does not fit in the free region {at:05X}-{PRESETS_END - 1:05X}')
         rom[at:at + len(menu)] = menu
-        print(f'pedal menu {len(menu)} B @00A00 (E0A0:0000)')
+        print(f'pedal menu {len(menu)} B @{at:05X} (E{at // 16:03X}:0000), {PRESETS_END - at - len(menu)} B left')
     name = f'gp16_mod_v{VERSION.replace(".", "_")}'
     p128 = os.path.join(out, name + '.bin'); p512 = os.path.join(out, name + '_sst512k.bin')
     open(p128, 'wb').write(rom)

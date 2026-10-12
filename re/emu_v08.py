@@ -65,8 +65,9 @@ KEYT = phys(0xF00E, 0x1CD2)
 mu.mem_write(KEYT, b'\xcb')                                  # keytest -> retf, AX set by the hook
 SERVICE = phys(0xF6A1, 0x03BC)
 MAINLOOP = phys(0xF6A1, 0x006B)
-BOOT = phys(0xE0A0, 3)
-MENU = phys(0xE0A0, 0)
+MSEG = int.from_bytes(rom[0x16B3C + 3:0x16B3C + 5], 'little')   # OS segment from the SYSTEM-key hook (E0A0 / E020)
+BOOT = phys(MSEG, 3)
+MENU = phys(MSEG, 0)
 SYSMENU = phys(0xF6A1, 0x1530)
 LOADBUF = phys(0xF6A1, 0x0382)
 import struct
