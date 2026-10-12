@@ -1,8 +1,8 @@
 <p align="center"><img src="https://raw.githubusercontent.com/yuyoi/Rompler-RosettaRom/main/assets/logo.png" width="360" alt="Rosetta"></p>
 
-# Super GP-16 Rosetta OS (JSW ROSETTA OS v2.1)
+# Super GP-16 Rosetta OS (JSW ROSETTA OS v2.2)
 
-> **Runs on real hardware.** v2.1 runs on a real Roland GP-16 from a flash chip in the IC11 socket. Pedal and rig
+> **Runs on real hardware.** v2.2 runs on a real Roland GP-16 from a flash chip in the IC11 socket. Pedal and rig
 > modes are played on the unit. Board mode and board memories pass full-firmware emulation; their hardware test is in
 > progress. See [Status](#status).
 
@@ -32,7 +32,8 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 - **Expression pedal per pedal.** The wahs sweep, the Whammy bends. On a board, the first pedal in the chain that
   wants the expression pedal gets it.
 - **Pedals can bring their own chain order.** FUNERAL is the Funeralopolis path: Muff, into a parked wah, into the
-  compressor acting as a cranked amp.
+  compressor acting as a cranked amp. Its VOL knob goes past real-pedal range: above about 6 it is a boost (fuzz level,
+  compressor makeup gain and EQ output all rise together, all at max on 10).
 - **LINE OUT FILTER knobs** get a dB law with a true OFF at 0 (stock never fully cuts a band).
 - **SysEx debug port** (MIDI ch 1): DSP coefficient writes and memory read/write from a PC (`re/gp16poke.py`).
 
@@ -98,19 +99,19 @@ anything other than the "Super GP Ver 1.0" ROM (MD5 `ac5f56bcb3d8c30ddf3f1ffe88b
    cd re
    py -3.11 build_all.py ../ic11.bin
    ```
-   This writes `re/build/gp16_mod_v2_1.bin` (128 KB) and `re/build/gp16_mod_v2_1_sst512k.bin` (the same image 4x).
+   This writes `re/build/gp16_mod_v2_2.bin` (128 KB) and `re/build/gp16_mod_v2_2_sst512k.bin` (the same image 4x).
 3. **Burn** the `_sst512k` file to a 512 KB flash (SST39SF040, or AMIC A29040 for chips that ID as `0x3786`), read it
    back and compare:
    ```
-   minipro -p SST39SF040 -w gp16_mod_v2_1_sst512k.bin
+   minipro -p SST39SF040 -w gp16_mod_v2_2_sst512k.bin
    ```
 4. **Fit it in IC11** (notch the same way). The GP-16 board already ties pin 31 high, so the flash drops straight in:
    no wires, no cuts. Put the original chip back any time.
 
 - **Factory reset warning:** only 1 factory preset is kept (the space went to the new OS), so a factory reset fills
   every patch slot with it. Your own patches are only touched if you run one.
-- **Settings across versions:** knob positions and board memories reset only when the pedal list or knob layout
-  changes; voicing tweaks keep them.
+- **Settings across versions:** knob positions and board memories reset only when the pedal list or the number of
+  knobs changes; voicing and knob retunes keep them.
 - Please don't share patched `.bin` files: share this repo.
 
 ### Test in emulation first (optional)
@@ -118,9 +119,9 @@ anything other than the "Super GP Ver 1.0" ROM (MD5 `ac5f56bcb3d8c30ddf3f1ffe88b
 `pip install unicorn capstone`. Each script runs the whole firmware, boots to the main loop and plays a scripted
 front-panel session:
 ```
-py -3.11 -I emu_v10.py build/gp16_mod_v2_1.bin    # macros, 6-knob screen, switches, Dim C, exp pedal, rig, board memories
-py -3.11 -I emu_v09.py build/gp16_mod_v2_1.bin    # board mode: grabs, order, A/B/Y
-py -3.11 -I emu_boot_banner.py build/gp16_mod_v2_1.bin   # boot screen text
+py -3.11 -I emu_v10.py build/gp16_mod_v2_2.bin    # macros, 6-knob screen, switches, Dim C, exp pedal, rig, board memories
+py -3.11 -I emu_v09.py build/gp16_mod_v2_2.bin    # board mode: grabs, order, A/B/Y
+py -3.11 -I emu_boot_banner.py build/gp16_mod_v2_2.bin   # boot screen text
 ```
 The test scripts print `PASS`. `emu_v10.py` also checks that nothing but the OS writes to its battery-RAM areas.
 
@@ -161,7 +162,8 @@ listing is derived from Roland's code: keep it private.
 | 0.9 | BOARD mode, 9 new pedals, A/B/Y box | folded into 1.0 |
 | 1.0 | JSW ROSETTA OS v1: macro knobs, 6-knob screen, board memories, exp pedal per pedal, 16 new sounds, 1 factory preset | works |
 | 2.0 | every voicing redone from the original circuits in real units (Hz / dB / Q) | works |
-| 2.1 | level match: Funeral and the overdrives brought up to the fuzzes; settings survive voicing tweaks | burned, testing |
+| 2.1 | level match: Funeral and the overdrives brought up to the fuzzes; settings survive voicing tweaks | works |
+| 2.2 | Funeral VOL = boost knob (way louder past 6) | works |
 
 On one unit the LCD contrast used to come up low on about 1 in 5 boots. The OS re-sends the contrast setting at the
 end of boot, which fixed it there.

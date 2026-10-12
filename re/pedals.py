@@ -211,7 +211,7 @@ PEDALS = {
 # Level trims (EQ OUT, dB; tone unchanged). User 2026-10-13: "every fuzz is loud now except the funeral" = the fuzzes
 # are right, bring Funeral up to them (NOT the fuzzes down); then "louder funeral and ts etc, a little eq gain" = the
 # overdrives up to the fuzz level too. re/level_match.py estimates loudness from the recipes.
-TRIM = {'funeral': 7.0, 'tubescreamer': 5.0, 'sd1': 6.0, 'klon': 5.0, 'ironman': 4.0, 'rangemaster': 4.5, 'od1': 5.5}   # v2.1: Funeral + overdrives up to the fuzz level
+TRIM = {'tubescreamer': 5.0, 'sd1': 6.0, 'klon': 5.0, 'ironman': 4.0, 'rangemaster': 4.5, 'od1': 5.5}   # overdrives up to the fuzz level; Funeral's level = its VOL knob (boost range)
 for _k, _t in TRIM.items():
     PEDALS[_k][0x2D] = db((PEDALS[_k].get(0x2D, 24) - 24) / 2 + _t)
 

@@ -6,7 +6,7 @@ pedal_data.inc, assembles the boot dragon and the pedal menu with NASM, then run
 NASM: on PATH, in ../tools/nasm-2.16.03/, or named by the NASM environment variable."""
 import hashlib, os, shutil, subprocess, sys
 
-VERSION = '2.1'                     # pedal_menu.asm is the v1 source; older menus: pedal_menu_v07/v08/v09.asm
+VERSION = '2.2'                     # pedal_menu.asm is the v1 source; older menus: pedal_menu_v07/v08/v09.asm
 STOCK_MD5 = 'ac5f56bcb3d8c30ddf3f1ffe88b13556'
 here = os.path.dirname(os.path.abspath(__file__))
 
