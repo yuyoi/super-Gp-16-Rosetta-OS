@@ -149,6 +149,50 @@ KNOBS = {
  'dimc':         [('MOD', [(0x36, [0, 50, 55, 60, 65]), (0x32, [0, 20, 25, 30, 35]), (0x34, [15, 15, 20, 25, 35]),
                            (0x35, [0, 25, 35, 45, 55]), (0x33, [20, 20, 25, 30, 35]), (0x31, [8, 8, 10, 12, 14])], 4, 5, 2)],
 }
+CABA = 0x7E                 # pseudo SysEx address: knob table target = cab type (OS writes the HI-band coefficients)
+D_CAB = 6                   # knob disp: cab names (OFF/4X/2X/1X)
+CABS = [(4500, 1.4), (5500, 1.0), (3800, 1.7)]   # HI-band low-pass (Hz, Q): 4X = 4x12 closed, 2X = 2x12 open, 1X = 1x12
+CAB_KNOB = ('CB', [(CABA, [0, 1, 2, 3])], 3, D_CAB, 0)
+HOTA = 0x7D                 # pseudo SysEx address: knob table target = DIST x2 stage (OS rewrites DSP chip 0 step 10B)
+HOT_DRV = {20: (50, 62, 80, 100),   # halves knobs: 10+ / 11 / 11+ / 12 = x2 stage + drive: about +0 / +2 / +4 / +6 dB
+           10: (70, 100)}           # whole-step knobs: 11 / 12 = +3 / +6 dB
+
+def hot_knob(kn, rec=None):
+    """v2.5: a DIST drive knob goes past 10: two more positions ('11', '12') = drive held + the x2 stage (HOT).
+    The default stays where the original linear knob put it (computed from the recipe here)."""
+    label, tg = kn[0], kn[1]
+    steps = kn[2] if len(kn) > 2 else 20
+    disp = kn[3] if len(kn) > 3 else 0
+    dflt = kn[4] if len(kn) > 4 else None
+    if dflt is None and rec is not None:
+        a0, v0, v10 = tg[0]
+        cur = rec.get(a0)
+        dflt = steps // 2 if cur is None else max(0, min(steps, round((cur - v0) / (v10 - v0) * steps)))
+    rest = (disp, dflt)
+    tabs = []
+    for t in tg:
+        if len(t) == 2:
+            vals = list(t[1]) + [t[1][-1]] * len(HOT_DRV[steps])
+        else:
+            a, v0, v10 = t
+            vals = [round(v0 + (v10 - v0) * k / steps) for k in range(steps + 1)]
+            vals += list(HOT_DRV[steps]) if a == 0x14 else [vals[-1]] * len(HOT_DRV[steps])
+        tabs.append((t[0], vals))
+    tabs.append((HOTA, steps))                                  # compact: 2 bytes, OS: hot = knob > base steps
+    return (label, tabs, steps + len(HOT_DRV[steps])) + rest
+
+
+def apply_hot(knobs, recipes):
+    for k, ks in knobs.items():
+        if not recipes[k].get(0x0E, 0) & 2:                    # DIST block (the x2 stage is in its chain) only
+            continue
+        for i, kn in enumerate(ks):
+            if any(t[0] == 0x14 and len(t) == 3 for t in kn[1]):
+                ks[i] = hot_knob(kn, recipes[k])
+                break
+
+
+
 AMP_KNOBS = {
  'clean':  [('VOL', [(0x5B, 40, 100)]), ('TRB', [(0x58, 0, 100)]), ('BAS', [(0x5A, 0, 100)])],
  'twin':   [('VOL', [(0x5B, 40, 100)]), ('TRB', [(0x58, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('BAS', [(0x5A, 0, 100)])],
@@ -163,6 +207,16 @@ AMP_KNOBS = {
  'randall':   [('VOL', [(0x5B, 40, 100)]), ('TRB', [(0x58, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('BAS', [(0x5A, 0, 100)])],
  'jcm800rip': [('PRS', [(0x57, 0, 100)]), ('BAS', [(0x5A, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('TRB', [(0x58, 0, 100)])],
 }
+
+# v2.4 CAB: every amp but DI gets a CAB knob (cab sim in the HI EQ band, written by the OS after each apply/knob move).
+# Amps that reach 5 knobs move to the 5-knob screen: 2-char names, whole steps 0-10.
+SHORT = {'VOL': 'VL', 'TRB': 'TR', 'BAS': 'BS', 'MID': 'MD', 'PRS': 'PR', 'CUT': 'CT', 'TUN': 'TN'}
+for _k, _ks in AMP_KNOBS.items():
+    if _k == 'di':
+        continue
+    if len(_ks) >= 4:
+        _ks[:] = [(SHORT[k[0]], k[1], 10) + tuple(k[3:]) for k in _ks]
+    _ks.append(CAB_KNOB if len(_ks) >= 4 else ('CAB',) + CAB_KNOB[1:])
 
 # ---------------------------------------------------------------- BOARD mode
 # 12 blocks in chain order = board slots. A pedal sits in its HOME slot and may grab EXTRA blocks its recipe uses.
@@ -292,7 +346,7 @@ def knob_block(knobs, rec, key):
     for j, (label, tg, steps, disp, dflt) in enumerate(ks):
         assert 1 <= len(tg) and 1 <= steps <= 24, (key, label)
         if six:
-            assert steps == 10 and disp == 0 and len(label) <= 2, f'{key} {label}: 6-knob screen = whole steps, 2-char names'
+            assert (steps in (10, 12) and disp == 0 or disp == D_CAB) and len(label) <= 2,                 f'{key} {label}: 6-knob screen = whole steps, 2-char names'
             lab = label.rjust(2) + ' '
         else:
             assert len(label) <= 3, (key, label)
@@ -303,7 +357,8 @@ def knob_block(knobs, rec, key):
             t0 = tg[0]
             cur = cur_val(rec, t0[0])
             if len(t0) == 2:
-                dflt = t0[1].index(cur) if cur in t0[1] else 0
+                top = next((t[1] for t in tg if t[0] == HOTA), steps)            # never default into HOT
+                dflt = 0 if cur is None else min(range(top + 1), key=lambda i: abs(t0[1][i] - cur))
             elif cur is None:
                 dflt = steps // 2 if disp in (0, 2) else 0
             else:
@@ -312,7 +367,10 @@ def knob_block(knobs, rec, key):
         body = b''
         for t in tg:
             a = t[0]
-            assert 0x0F <= a <= 0x62, f'{key} {label}: knob target {a:#x}'
+            assert 0x0F <= a <= 0x62 or a in (CABA, HOTA), f'{key} {label}: knob target {a:#x}'
+            if a == HOTA:
+                body += bytes([a | 0x80, t[1]])
+                continue
             if len(t) == 2:
                 assert a not in TWO and len(t[1]) == steps + 1, f'{key} {label}: table needs steps+1 values, 1-byte param'
                 assert all(0 <= v <= 127 or v == 0xFF for v in t[1])
@@ -370,6 +428,7 @@ def table(label, recs, knobs, home, ks):
 
 
 if __name__ == '__main__':
+    apply_hot(KNOBS, P.PEDALS)
     missing = [k for k in P.PEDALS if k not in KNOBS] + [k for k in P.AMPS if k not in AMP_KNOBS]
     missing += [k for k in P.PEDALS if k not in HOME] + [k for k in list(P.PEDALS) + list(P.AMPS) if k not in NAMES]
     assert not missing, f'no knobs/home/name for {missing}'
@@ -388,6 +447,14 @@ if __name__ == '__main__':
         body.append(f'sl{i}: db {len(idx)}, ' + ', '.join(str(x) for x in idx))
     body.append(f'sl11: db {len(P.AMPS)}, ' + ', '.join(str(i + 1) for i in range(len(P.AMPS))))
     body.append('s_slots: db ' + ', '.join('"' + n.ljust(16) + '"' for n in SLOTS))
+    import cabband                          # cab types -> far_blob.asm (HI-band low-pass coefficients, 12-bit)
+    far = ['; generated by gen_pedal_data.py -- do not edit',
+           'cab_steps: dw ' + ', '.join(f'0x{st:03x}' for st in (0x0B1, 0x0B3, 0x0B4, 0x0B5, 0x0B6, 0x0B9))]
+    for i, (f, q) in enumerate(CABS):
+        c = cabband.hi_coefs(f, q)
+        far.append(f'cab_t{i}: dw ' + ', '.join(f'0x{c[st]:03x}' for st in (0x0B1, 0x0B3, 0x0B4, 0x0B5, 0x0B6, 0x0B9))
+                   + f'   ; {f} Hz Q {q}')
+    open(os.path.join(here, 'far_data.inc'), 'w').write(chr(10).join(far) + chr(10))
     # structure only (entry names, knob counts + steps, store addresses, homes, slot lists): recipes, knob targets and
     # defaults may change without wiping the user's knob positions and board memories
     layout = SIG + [l for l in body if l.startswith(('ped_home', 'sl', 'slot_lists'))]

@@ -131,12 +131,30 @@ def main():
         patches.append((0x16A73, bytes.fromhex('c60612a300'),
                         bytes([0x9a, 0x03, 0x00]) + (0xE000 + MENU_ROM // 16).to_bytes(2, 'little')))   # lcall E0A0/E020:0003
 
+    # v2.7: kill the stock EDIT menu (main-loop EDIT key F6A1:0106 -> the OS split, same as SYSTEM) and the hidden
+    # power-on modes (F6A1:0037 lcall F2FC:0186 -> jmp 0045: credits, init menu = factory preset loads / system init /
+    # demos, test mode ID 5218), then wipe what only they reached to FF: dead_ranges.txt (reach.py: 51 stock functions
+    # + their jump tables, and the credits/demo/test text at DS 1AC7-22DA except the banner's two %s formats).
+    if VERSION >= '2.7':
+        patches.append((0x16B16, bytes.fromhex('9a2005a1f6'),
+                        bytes([0x9a, 0x00, 0x00]) + (0xE000 + MENU_ROM // 16).to_bytes(2, 'little')))   # lcall E020:0000
+        patches.append((0x16A47, bytes.fromhex('9a8601fcf2'), bytes.fromhex('eb0c909090')))             # jmp short 0045
     for off, old, new in patches:
         assert len(old) == len(new), hex(off)
         if rom[off:off + len(old)] != old:
             sys.exit(f'original bytes differ at {off:05X}: {rom[off:off+len(old)].hex()} != {old.hex()}')
         rom[off:off + len(new)] = new
         print(f'patched {off:05X} ({len(new)} bytes)')
+    if VERSION >= '2.7':
+        kill = [(int(a, 16), int(b, 16)) for a, b, _ in (l.split() for l in open(os.path.join(here, 'dead_ranges.txt'))
+                                                           if not l.startswith('#'))]
+        dead_ok = {0x13499, 0x1921E}                 # v0.3 preset-reader patches: both readers are dead now
+        for off, old, new in patches:
+            hit = any(a < off + len(new) and off < b for a, b in kill)
+            assert not hit or off in dead_ok, f'wipe would hit the live patch at {off:05X}'
+        for a, b in kill:
+            rom[a:b] = bytes([0xFF]) * (b - a)
+        print(f'v2.7 kill: {sum(b - a for a, b in kill)} B of dead stock code + text wiped to FF ({len(kill)} ranges)')
     # v0.5: drop the boot dragon routine + frame table into the free regions
     if VERSION >= '0.5':
         code = open(os.path.join(here, 'dragon_boot.bin'), 'rb').read()
@@ -158,6 +176,14 @@ def main():
             sys.exit(f'pedal menu ({len(menu)} B) does not fit in the free region {at:05X}-{PRESETS_END - 1:05X}')
         rom[at:at + len(menu)] = menu
         print(f'pedal menu {len(menu)} B @{at:05X} (E{at // 16:03X}:0000), {PRESETS_END - at - len(menu)} B left')
+        fb = os.path.join(here, 'far_blob.bin')
+        if VERSION >= '2.6':
+            blob = open(fb, 'rb').read()
+            FAR_ROM, FAR_END = 0x1FD90, 0x1FFF0      # stock end-of-ROM zero run (after the dragon frame table)
+            if FAR_ROM + len(blob) > FAR_END or set(rom[FAR_ROM:FAR_ROM + len(blob)]) != {0x00}:
+                sys.exit(f'far blob ({len(blob)} B) does not fit at {FAR_ROM:05X}-{FAR_END - 1:05X}')
+            rom[FAR_ROM:FAR_ROM + len(blob)] = blob
+            print(f'far blob {len(blob)} B @{FAR_ROM:05X} (FFD9:0000), {FAR_END - FAR_ROM - len(blob)} B left')
     name = f'gp16_mod_v{VERSION.replace(".", "_")}'
     p128 = os.path.join(out, name + '.bin'); p512 = os.path.join(out, name + '_sst512k.bin')
     open(p128, 'wb').write(rom)

@@ -6,7 +6,7 @@ pedal_data.inc, assembles the boot dragon and the pedal menu with NASM, then run
 NASM: on PATH, in ../tools/nasm-2.16.03/, or named by the NASM environment variable."""
 import hashlib, os, shutil, subprocess, sys
 
-VERSION = '2.3'                     # pedal_menu.asm is the v1 source; older menus: pedal_menu_v07/v08/v09.asm
+VERSION = '2.7'                     # pedal_menu.asm is the v1 source; older menus: pedal_menu_v07/v08/v09.asm
 STOCK_MD5 = 'ac5f56bcb3d8c30ddf3f1ffe88b13556'
 here = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,6 +39,7 @@ def main():
     run(sys.executable, 'gen_pedal_data.py')
     run(n, '-f', 'bin', 'dragon_boot.asm', '-o', 'dragon_boot.bin')
     run(n, '-f', 'bin', 'pedal_menu.asm', '-o', 'pedal_menu.bin', '-l', 'pedal_menu.lst')
+    run(n, '-f', 'bin', 'far_blob.asm', '-o', 'far_blob.bin', '-l', 'far_blob.lst')
     run(sys.executable, 'build_mod.py', dst, 'build', VERSION)
     print(f'\nburn build/gp16_mod_v{VERSION.replace(".", "_")}_sst512k.bin (SST39SF040 / A29040), read back, compare.')
 

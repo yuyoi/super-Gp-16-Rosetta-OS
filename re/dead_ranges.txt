@@ -1,0 +1,22 @@
+# ROM ranges [start, end) freed by kill v2.7: dead stock code + jump tables (reach.py), then text
+# cuts: F6A1:0037 F6A1:0040 F6A1:0106
+0919A 091C4 code
+09800 0984C code
+098D8 0996F code
+09E9C 0A278 code
+0DDFE 0DED5 code
+0DF30 0E10A code
+10124 10256 code
+1059E 10844 code
+108F2 112A2 code
+113D2 11495 code
+114F6 11AF5 code
+1300E 147FA code
+14C8A 1564D code
+15760 15895 code
+16B66 16D2E code
+16EA6 17F3F code
+18ECC 190B3 code
+1915C 194A7 code
+1BAC7 1BE5E text
+1BE66 1C2DB text

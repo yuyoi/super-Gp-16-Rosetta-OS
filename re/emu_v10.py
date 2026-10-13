@@ -38,6 +38,32 @@ def ram_w(uc, acc, addr, size, val, ud):
 mu.hook_add(UC_HOOK_MEM_WRITE, ram_w, None, 0x5000, 0x56FF)
 mu.hook_add(UC_HOOK_MEM_WRITE, ram_w, None, 0x105000, 0x1056FF)
 
+# ---- v2.4 cab: chip-1 HI-band coefficient commits (step, coef) from the DSP bus latches
+st['cab'] = []
+_lat = {4: 0, 5: 0}
+def cab_w(uc, acc, addr, size, val, ud):
+    o = addr - 0x80000
+    if o in (4, 5):
+        _lat[o] = val & 0xFF
+    elif o in (0x14B1, 0x14B3, 0x14B4, 0x14B5, 0x14B6, 0x14B9):
+        st['cab'].append((o - 0x1400, _lat[4] | _lat[5] << 8))
+mu.hook_add(UC_HOOK_MEM_WRITE, cab_w, None, 0x80000, 0x81C00)
+st['hot'] = []
+_il = {8: 0, 9: 0, 10: 0}
+def hot_w(uc, acc, addr, size, val, ud):
+    o = addr - 0x80000
+    if o in (8, 9, 10):
+        _il[o] = val & 0xFF
+    elif o == 0x110B:
+        st['hot'].append(_il[8] | _il[9] << 8 | _il[10] << 16)
+mu.hook_add(UC_HOOK_MEM_WRITE, hot_w, None, 0x80000, 0x81C00)
+CAB4X = [(0xB1, 0x6F7), (0xB3, 0xAB4), (0xB4, 0x3A0), (0xB5, 0x443), (0xB6, 0xB58), (0xB9, 0xE00)]
+def cab_last():
+    d = {}
+    for stp, c in st['cab']:
+        d[stp] = c
+    return d
+
 def last(a):
     v = [x for b, x in st['dt1'] if b == a]
     return v[-1] if v else None
@@ -62,23 +88,49 @@ SCRIPT = [
     lcdh('SUS 8.0', 'SUS*', '8.0 '),
     C(lambda: eq('SUS 8.0 -> drive 45+55*16/20 = 89, comp sus 30+55*16/20 = 74', (last(0x14), last(0x11)), (89, 74))),
     C(lambda: eq('live setters: p5 drive + p2 sustain, no reload', (sorted(p for p, v in st['live']), st['reload']), ([2, 5], 0))),
+    # ---- v2.5 HOT: drive past 10 = x2 DIST stage (chip 0 step 10B 9204a7)
+    C(lambda: st['hot'].clear()),
+    *[('key', 3)] * 4, ('wait',), ('wait',),
+    lcdh('SUS 10 (stock max)', '10 '),
+    C(lambda: eq('SUS 10: drive 100, stage 10B stock (1204a7)', (last(0x14), st['hot'][-1] if st['hot'] else None), (100, 0x1204A7))),
+    ('key', 3), ('wait',), ('wait',),
+    lcdh('SUS 10+', '10+'),
+    C(lambda: eq('SUS 10+: drive 50 + x2 stage (9204a7)', (last(0x14), st['hot'][-1] if st['hot'] else None), (50, 0x9204A7))),
+    ('key', 3), ('wait',), ('wait',),
+    lcdh('SUS 11', '11 '),
+    C(lambda: eq('SUS 11: drive 62 + x2', (last(0x14), st['hot'][-1]), (62, 0x9204A7))),
+    ('key', 3), ('wait',), ('wait',),
+    lcdh('SUS 11+', '11+'),
+    C(lambda: eq('SUS 11+: drive 80 + x2', (last(0x14), st['hot'][-1]), (80, 0x9204A7))),
+    ('key', 3), ('wait',), ('wait',),
+    lcdh('SUS 12', '12 '),
+    C(lambda: eq('SUS 12: drive 100 + x2 stage', (last(0x14), st['hot'][-1]), (100, 0x9204A7))),
+    ('key', 3), ('wait',), ('wait',), lcdh('SUS stops at 12', '12 '),
+    *[('key', 7)] * 4, ('wait',), ('wait',),
+    lcdh('SUS back to 10', '10 '),
+    C(lambda: eq('back to 10: stage stock again', st['hot'][-1], 0x1204A7)),
+    *[('key', 7)] * 4, ('wait',), lcdh('SUS 8.0 again', '8.0 '),
     # ---- 6-knob screen (Metal Zone)
     ('key', 0x0F), ('dial', ped('metalzone')), ('wait',), lcdh('MZ picked', 'METAL ZONE'),
     ('key', 0x0F), lcdh('MZ 6-knob screen', 'LO HM LM H  G  L', ' 6  7  2 6  9  5'),
     C(lambda: eq('underline cursor on (knob LO)', curon(), True)),
     C(lambda: eq('LCD cursor under LO value (row 2, col 1)', g['lcd']['addr'], 0x41)),
-    dmark('button 5 = pick H'), ('key', 5),
+    dmark('button 4 = pick H (v2.4: 1-6 pick in a row)'), ('key', 4),
     C(lambda: eq('active knob = H (3)', rd(0xCF39)[0], 3)),
     C(lambda: eq('cursor under H value (col 9)', g['lcd']['addr'], 0x49)),
     C(lambda: eq('picking does not change sound', st['dt1'], [])),
-    dmark('button 4 = up'), ('key', 4),
+    dmark('VALUE up (GROUP) = up'), ('key', 0x0A), ('wait',),
     lcdh('H 7', ' 6  7  2 7  9  5'),
     C(lambda: eq('H 7 -> EQ HI level 48*7/10 = 33', last(0x24), 33)),
     C(lambda: eq('live p21 (HI LEVEL)', [p for p, v in st['live']], [21])),
     dmark('dial -> 10'), ('dial', 10), ('wait',),
     lcdh('H 10', ' 6  7  210  9  5'),
     C(lambda: eq('H 10 -> 48', last(0x24), 48)),
-    ('key', 8), C(lambda: eq('button 8 = down -> 43', last(0x24), 43)),
+    ('key', 0x09), ('wait',), C(lambda: eq('VALUE down (BANK) -> 43', last(0x24), 43)),
+    ('key', 8), C(lambda: eq('button 8 = CURSOR > : next knob (G, 4)', rd(0xCF39)[0], 4)),
+    ('key', 8), ('key', 8), C(lambda: eq('button 8 past L wraps to LO (0)', rd(0xCF39)[0], 0)),
+    ('key', 7), C(lambda: eq('button 7 = CURSOR < wraps to L (5)', rd(0xCF39)[0], 5)),
+    ('key', 4), C(lambda: eq('back on H for the next checks', rd(0xCF39)[0], 3)),
     # ---- expression pedal per pedal (Whammy)
     ('key', 0x0F), ('dial', ped('whammy')), ('wait',), lcdh('whammy', 'WHAMMY'),
     C(lambda: eq('cursor off on the pick page', curon(), False)),
@@ -121,14 +173,37 @@ SCRIPT = [
     # ---- RIG with a new amp
     ('key', 0x0D), lcdh('ESC -> split', 'RIG'),
     C(lambda: eq('cursor off at split', curon(), False)),
-    ('key', 0x10), ('key', 0x10), lcdh('rig pick amp', '>A:OFF'),
+    ('key', 0x10), ('key', 0x10), lcdh('RIG DOWN = amp side (amp OFF: no knobs)', 'NO KNOBS'),
+    ('key', 0x10), lcdh('DOWN again = pick amp', '>A:OFF'),
     ('dial', amp('jc120')), ('wait',), lcdh('JC-120 picked', ' P:ELEC MISTRESS', '>A:JC-120'),
     ('dial', amp('randall')), ('wait',), lcdh('signature amp', '>A:RANDALL'),
     C(lambda: check('RANDALL applied its 750 Hz scoop (DT1 0x25 = 19, 0x27 = -9 dB)', (0x25, 19) in st['dt1'] and (0x27, 6) in st['dt1'])),
     ('dial', amp('jc120')), ('wait',),
-    dmark('amp VOL up'), ('key', 1),
-    lcdh('amp knobs', 'VOL*TRB MID BAS '),
-    C(lambda: eq('VOL 7.0 -> master 40+60*14/20 = 82', last(0x5B), 82)),
+    dmark('amp VOL up'), ('key', 1), ('key', 0x0A), ('wait',),
+    lcdh('amp knobs (v2.4: 5-knob screen, CAB off)', 'VL TR MD BS CB', ' 8  6  5  4 --'),
+    C(lambda: eq('VOL 7 -> 8 -> master 40+60*8/10 = 88', last(0x5B), 88)),
+    C(lambda: st['cab'].clear()),
+    ('key', 5), ('wait',), ('key', 0x0A), ('wait',), ('wait',),
+    lcdh('CAB 4X', ' 4X'),
+    C(lambda: eq('CAB 4X: HI band = 4x12 low-pass coefficients', sorted(cab_last().items()), CAB4X)),
+    C(lambda: eq('CAB knob writes no SysEx', [a for a, v in st['dt1'] if a >= 0x0C and a not in (0x5B,)], [])),
+    C(lambda: st['cab'].clear()),
+    ('key', 0x09), ('wait',), ('wait',),
+    lcdh('CAB off again', ' --'),
+    C(lambda: eq('smooth encoder: CB dial = 4 counts per position (position 0, max 15, VALUE step 4)',
+                 (w16(0xA654) // 4, w16(0xA6BE), w16(0xA6B8)), (0, 15, 4))),
+    C(lambda: g['wr'](0xA654, (3).to_bytes(2, 'little'))), ('wait',), ('wait',),
+    lcdh('3 counts: still --', ' --'),
+    C(lambda: g['wr'](0xA654, (5).to_bytes(2, 'little'))), ('wait',), ('wait',),
+    lcdh('5 counts: 4X', ' 4X'),
+    C(lambda: g['wr'](0xA654, (9).to_bytes(2, 'little'))), ('wait',), ('wait',),
+    lcdh('9 counts: 2X', ' 2X'),
+    C(lambda: g['wr'](0xA654, (15).to_bytes(2, 'little'))), ('wait',), ('wait',),
+    lcdh('15 counts: 1X', ' 1X'),
+    C(lambda: g['wr'](0xA654, (0).to_bytes(2, 'little'))), ('wait',), ('wait',),
+    lcdh('back to 0: --', ' --'),
+    C(lambda: check(f'CAB off: HI band back to the amp shelf (0B9 = {cab_last().get(0xB9, 0):#05x}, not 0xE00)',
+                    cab_last().get(0xB9) not in (None, 0xE00) and len(cab_last()) == 6)),
     # ---- BOARD: fuzz factory grabs the gate, wah owns the exp pedal before whammy
     ('key', 0x0D), ('key', 0x0C), lcdh('board A1', 'A1 COMP', 'OUT'),
     ('key', 0x0F), *[('key', 0x09)] * 8,

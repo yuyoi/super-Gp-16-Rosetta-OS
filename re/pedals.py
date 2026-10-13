@@ -270,7 +270,7 @@ def ports(name='OCTA-CAPTURE'):
 
 
 def roland(data):
-    cs = (128 - sum(data) % 128) % 128
+    cs = (128 - sum(data[1:]) % 128) % 128          # Roland sum: address + data/size, not the command byte (RQ1 checks it)
     return [0x41, 0, 0x2A] + data + [cs]
 
 

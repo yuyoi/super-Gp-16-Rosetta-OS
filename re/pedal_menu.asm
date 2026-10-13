@@ -4,9 +4,11 @@
 ;   +3  power-on entry (F6A1:0063: mov byte [a312],0 -> lcall here). Starts in the last mode.
 ; split:  FUNCTION UP -> PEDAL, DOWN -> RIG, EDIT -> BOARD, SYSTEM -> stock System menu, ESC -> patch screen.
 ; PEDAL pages: 0 knobs, 1 pick pedal.     RIG pages: 0 pedal knobs, 1 amp knobs, 2 pick pedal, 3 pick amp.
-;   FUNCTION UP/DOWN = next/previous page. ESC = back to split. BANK/GROUP = dial -/+.
+;   FUNCTION UP/DOWN = next/previous page; RIG: UP = the pedal (top row), DOWN = the amp (bottom row), the same side
+;   again = pick <-> knobs. ESC = back to split. BANK/GROUP = dial -/+ (VALUE down/up).
 ;   Knob page: buttons 1-4 = knob 1-4 up, 5-8 = knob 1-4 down; the dial follows the knob touched last ('*').
-;   5-6 knobs: names over numbers, 1-3 / 5-7 pick a knob (underline cursor), 4 = up, 8 = down, dial turns it.
+;   5-6 knobs: names over numbers, 1-6 pick a knob (underline cursor), 7/8 = CURSOR previous/next knob,
+;   dial or VALUE up/down (GROUP/BANK) turns it. CAB knob (amps): OFF / 4X / 2X / 1X cab sim in the HI EQ band.
 ;   Mode-button pedals (Dimension C): buttons 1-4 = mode, the lit one again = off.
 ;   Knobs are macros: one knob may drive several params, linearly or by a value table.
 ; BOARD: 15 pages = 12 block slots (A1 COMP .. B6 AMP) + ORDER + OUT (A/B/Y box) + BOARD MEMORY (1-8 = load).
@@ -95,6 +97,21 @@ K_CLR    equ 0xff
 NSLOT    equ 15              ; BOARD pages
 NORDA    equ 4               ; A chain presets
 D_MODE   equ 5               ; knob disp: mode buttons
+D_CAB    equ 6               ; knob disp: cab names (OFF / 4X / 2X / 1X)
+CABT     equ 0xfe            ; knob table target = cab type (0 off, 1-3 = cab_t0..2), not a SysEx address
+ST_CAB   equ 0xce3a          ; cab in use (0 = off): its coefficients go into the HI EQ band (chip 1 0B1-0B9)
+ST_CABP  equ 0xce3b          ; 1 = cab coefficients due (written by mloop once the sound change is done)
+ST_DSC   equ 0xce3c          ; dial counts per position (dial_set: short ranges, smooth encoder)
+HOTT     equ 0xfd            ; knob table target = DIST x2 stage (drive past 10): 0 stock / 1 hot
+ST_HOT   equ 0xce3d          ; 1 = DSP chip 0 step 10B = 9204a7 (x2 into the DIST clipper), 0 = stock 1204a7
+ST_HOTP  equ 0xce3e          ; 1 = step 10B due (written by mloop once the sound change is done)
+E83B_SEG equ 0xe83b
+SETC1    equ 0x0679          ; chip 1 set_coef(step, coef): boot instruction + coefficient, commit 8
+FARSEG   equ 0xffd9          ; far_blob.bin at ROM 0x1FD90 (end-of-ROM zero run): overflow routines + tables
+FAR_DIALSET equ 0
+FAR_DIALVAL equ 3
+FAR_HOT  equ 6
+FAR_CAB  equ 9
 
 %macro farcall 2
         db 0x9a
@@ -132,7 +149,19 @@ mloop:
 .svc:   push ax
         farcall F6A1_SEG, SERVICE
         add sp, 2
-        cmp byte [ST_SAVE], 0
+        cmp byte [ST_CABP], 0        ; cab coefficients due, and the sound change is done
+        je .ncab
+        test byte [SNDREQ], 0x20
+        jnz .ncab
+        mov byte [ST_CABP], 0
+        call cab_now
+.ncab:  cmp byte [ST_HOTP], 0        ; DIST x2 stage due
+        je .nhot
+        test byte [SNDREQ], 0x20
+        jnz .nhot
+        mov byte [ST_HOTP], 0
+        call hot_now
+.nhot:  cmp byte [ST_SAVE], 0
         je .nsv
         jmp .save
 .nsv:   mov ax, K_ESC
@@ -187,13 +216,21 @@ mloop:
         call keyt
         jz .m1
         mov al, 1
-        call page_step
+        cmp byte [ST_STATE], 2
+        jne .mu
+        call rig_up
+        jmp mloop
+.mu:    call page_step
         jmp mloop
 .m1:    mov ax, K_DN
         call keyt
         jz .m2
         mov al, -1
-        call page_step
+        cmp byte [ST_STATE], 2
+        jne .md
+        call rig_dn
+        jmp mloop
+.md:    call page_step
         jmp mloop
 .m2:    call numbers
         jnz .mx
@@ -429,6 +466,35 @@ page_step:                           ; al = +1 / -1 (PEDAL / RIG)
         call sync_dial
         jmp redraw
 
+rig_up:                              ; RIG FUNCTION up = the pedal (top row): amp side -> same layer on the pedal side,
+        mov al, [ST_PAGE]            ; pedal side -> toggle pick <-> knobs. Pages: 0 P knobs, 1 A knobs, 2 pick P, 3 pick A
+        mov ah, 2
+        cmp al, 0
+        je .s
+        mov ah, 0
+        cmp al, 2
+        je .s
+        cmp al, 1
+        je .s
+        mov ah, 2
+.s:     jmp rig_set
+rig_dn:                              ; RIG FUNCTION down = the amp (bottom row), same scheme
+        mov al, [ST_PAGE]
+        mov ah, 3
+        cmp al, 1
+        je rig_set
+        mov ah, 1
+        cmp al, 3
+        je rig_set
+        cmp al, 0
+        je rig_set
+        mov ah, 3
+rig_set:
+        mov [ST_PAGE], ah
+        mov byte [ST_ACT], 0
+        call sync_dial
+        jmp redraw
+
 slot_step:                           ; al = +1 / -1 (BOARD pages 0..13)
         add al, [ST_PAGE]
         cmp al, 0x80
@@ -593,7 +659,30 @@ knob_core:                           ; si = entry, di = store, al = idx, dl = li
         jne .t1
         jmp .done
 .t1:    mov bx, [bp-10]
-        mov al, [cs:bx]
+        cmp byte [cs:bx], CABT       ; cab: remember the type, mloop writes the coefficients
+        jne .nc
+        mov si, [bp-2]
+        mov al, [cs:bx+si+1]
+        mov [ST_CAB], al
+        test al, al                  ; off: only a live move needs the amp's shelf back (an apply reloads it anyway)
+        jnz .cabp
+        cmp byte [bp-8], 0
+        jne .cabp
+        jmp .next
+.cabp:  mov byte [ST_CABP], 1
+        jmp .next
+.nc:    cmp byte [cs:bx], HOTT       ; hot (2 bytes: HOTT, base steps): knob past its base range = x2 DIST stage;
+        jne .nh                      ; mloop rewrites the stage instruction
+        mov al, [bp-2]
+        cmp al, [cs:bx+1]
+        mov al, 0
+        jbe .hs
+        inc al
+.hs:    mov [ST_HOT], al
+        mov byte [ST_HOTP], 1
+        mov ax, 2
+        jmp .adv
+.nh:    mov al, [cs:bx]
         and al, 0x7f
         sub al, 0x0c
         mov ah, 3
@@ -716,6 +805,45 @@ live_set:                            ; al = param p, cx = internal value -> desc
         and byte [es:TMIC], 0xbf
         ret
 
+cab_now:                             ; [ST_CAB] -> HI EQ band: the cab's low-pass coefficients, or (0) the buffer's shelf
+        mov al, [ST_CAB]
+        test al, al
+        jnz .on
+        mov bl, 0x23                 ; cab off: HI freq + gain back from the edit buffer through their own setters
+        call live_addr
+        mov bl, 0x24
+        jmp live_addr
+.on:    cmp al, 3
+        ja .x
+        farcall FARSEG, FAR_CAB      ; al = cab 1-3
+.x:     ret
+
+hot_now:                             ; chip 0 step 10B <- x2 DIST stage or stock (far_blob)
+        farcall FARSEG, FAR_HOT
+        ret
+
+live_addr:                           ; bl = SysEx addr -> its param's live setter with the edit buffer's value
+        mov bh, 0
+        sub bx, 0x0c
+        mov ax, bx
+        add bx, bx
+        add bx, ax                   ; ainfo: 3 B per address
+        add bx, ainfo
+        mov al, [cs:bx+1]            ; p
+        cmp al, 0xff
+        je .r
+        mov cl, [cs:bx+2]            ; internal offset
+        mov ch, 0
+        test byte [cs:bx], 0x20
+        mov bx, cx
+        jz .b
+        mov cx, [bx+BUF]
+        jmp live_set
+.b:     mov cl, [bx+BUF]
+        mov ch, 0
+        jmp live_set
+.r:     ret
+
 knobs_all:                           ; bl = which (0/1): every knob -> buffer (no live setters), in order
         push si
         push bx
@@ -765,7 +893,10 @@ set_knob:                            ; cl = knob idx, al = new k; si = entry, di
         pop cx
 .n:     inc cx
         jmp .l
-.d:     or al, 1                     ; ZF = 0
+.d:     cmp byte [ST_CAB], 0         ; a live setter may have rewritten the HI band: cab again
+        je .d1
+        mov byte [ST_CABP], 1
+.d1:    or al, 1                     ; ZF = 0
         ret
 .same:  xor al, al                   ; ZF = 1
         ret
@@ -835,23 +966,25 @@ knob_press:                          ; ax = button 1..8
         mov [ST_ACT], cl
         mov [ST_DIR], ch
         jmp .step
-.six:   mov al, [ST_BTN]             ; 5-6 knobs: 1-3 / 5-7 pick, 4 up, 8 down
-        mov byte [ST_DIR], 1
-        cmp al, 3
-        je .s_st
-        mov byte [ST_DIR], -1
-        cmp al, 7
-        je .s_st
-        cmp al, 4
+.six:   mov al, [ST_BTN]             ; 5-6 knobs: 1-6 pick, 7/8 = CURSOR < > (previous / next knob);
+        cmp al, 6                    ; the value: dial or VALUE up/down (GROUP / BANK)
         jb .s_pk
-        dec al                       ; 5-7 -> knobs 4-6
+        mov ah, [ST_ACT]
+        jne .s_nx
+        dec ah                       ; 7 = previous (wraps)
+        jns .s_set
+        mov ah, [ST_N]
+        dec ah
+        jmp .s_set
+.s_nx:  inc ah                       ; 8 = next (wraps)
+        cmp ah, [ST_N]
+        jb .s_set
+        mov ah, 0
+.s_set: mov al, ah
 .s_pk:  cmp al, [ST_N]
         jae .redr
         mov [ST_ACT], al
         jmp .redr
-.s_st:  mov al, [ST_ACT]
-        cmp al, [ST_N]
-        jae .redr
 .step:  mov al, [ST_ACT]
         call knob_rec                ; bx = record
         mov cl, [ST_ACT]
@@ -889,7 +1022,7 @@ dial_check:                          ; PEDAL / RIG
         test bh, bh
         jz .pick
         jmp dial_knob
-.pick:  mov ax, [DIAL]
+.pick:  call dial_val
         mov si, ST_PED
         test bl, bl
         jz .p
@@ -908,7 +1041,7 @@ dial_knob:                           ; bl = which: dial -> the active knob
         mov [ST_N], al
         cmp [ST_ACT], al
         jae .r
-        mov ax, [DIAL]
+        call dial_val
         mov cl, [ST_ACT]
         call set_knob
         jz .r
@@ -929,7 +1062,7 @@ board_dial:
         cmp byte [ST_OACT], 0
         je .s
         mov si, ORDB
-.s:     mov ax, [DIAL]
+.s:     call dial_val
         cmp al, [si]
         je .r
         mov [si], al
@@ -1081,6 +1214,9 @@ compute_owners:                      ; OWN[b] = slot whose pedal drives block b 
         ret
 
 board_apply:                         ; whole board -> edit buffer -> sound change
+        mov byte [ST_CAB], 0         ; the amp slot's CAB knob may set one
+        mov byte [ST_HOT], 0
+        mov byte [ST_HOTP], 1
         call compute_owners
         mov byte [ST_EXPW], 0xff     ; expression pedal: unassigned until a pedal claims it
         mov bl, 0x5c
@@ -1211,6 +1347,9 @@ apply_cur:
         jne apply
         mov dl, [ST_AMP]
 apply:                               ; ax = pedal idx, dx = amp idx
+        mov byte [ST_CAB], 0         ; no cab unless the amp's CAB knob sets one (knobs_all below)
+        mov byte [ST_HOT], 0         ; stock DIST stage unless a drive knob is past 10
+        mov byte [ST_HOTP], 1
         push dx
         push ax
         mov bl, 0x5c                 ; expression pedal unassigned unless the pedal claims it
@@ -1389,11 +1528,12 @@ sync_dial:                           ; point the dial at what the current page e
         mov cx, NAMP
 .pp:    mov ah, 0
         mov dl, 1
-dial_set:                            ; ax = value, cx = max, dl = wrap
-        mov [DIAL], ax
-        mov [DIALMAX], cx
-        mov word [DIALSTEP], 1
-        mov [DIALWRAP], dl
+dial_set:                            ; ax = value, cx = max, dl = wrap (far_blob: smooth-encoder scaling)
+        farcall FARSEG, FAR_DIALSET
+        ret
+
+dial_val:                            ; -> ax = dial position
+        farcall FARSEG, FAR_DIALVAL
         ret
 
 ; ---------------------------------------------------------------- screens
@@ -1719,13 +1859,28 @@ draw_six:                            ; 5-6 knobs: 2-char names over 2-digit valu
         mov ah, 0
         mov cx, 2
         call cursor
+        mov ax, di
+        call knob_rec                ; cab knob: 2-char name instead of the number
+        cmp byte [cs:bx+5], D_CAB
+        jne .num
         mov bx, [ST_SPTR]
+        mov al, [bx+di]
+        mov ah, 0
+        add ax, ax
+        mov bx, ax
+        mov al, [cs:bx+s_cab2]
+        call putc
+        mov al, [cs:bx+s_cab2+1]
+        jmp .d2
+.num:   mov bx, [ST_SPTR]
         mov al, [bx+di]
         cmp al, 10
         jb .d1
+        sub al, 10 - '0'             ; 10, 11, 12 (DIST hot)
+        push ax
         mov al, '1'
         call putc
-        mov al, '0'
+        pop ax
         jmp .d2
 .d1:    push ax
         mov al, ' '
@@ -1837,7 +1992,18 @@ put4sp:
         jmp putc
 
 put_val:                             ; al = k, ah = disp, dl = steps -> 3 chars
-        cmp ah, 3
+        cmp ah, D_CAB
+        jne .ncab
+        mov ah, 3
+        mul ah
+        mov bx, ax
+        mov al, [cs:bx+s_cab3]
+        call putc
+        mov al, [cs:bx+s_cab3+1]
+        call putc
+        mov al, [cs:bx+s_cab3+2]
+        jmp putc
+.ncab:  cmp ah, 3
         jb .nsw
         sub ah, 3                    ; 3 = OFF/ON, 4 = LO/HI
         shl ah, 1
@@ -1889,13 +2055,20 @@ put_val:                             ; al = k, ah = disp, dl = steps -> 3 chars
         call putc
         mov al, ' '
         jmp putc
-.h:     cmp al, 20                   ; 0-10 in halves
-        jne .n
+.h:     cmp al, 20                   ; 0-10 in halves; past 10 (DIST hot): 21-24 = 10+ 11 11+ 12
+        jb .n
+        sub al, 20
+        mov ah, ' '
+        shr al, 1
+        jnc .h1
+        mov ah, '+'
+.h1:    add al, '0'
+        push ax
         mov al, '1'
         call putc
-        mov al, '0'
+        pop ax
         call putc
-        mov al, ' '
+        mov al, ah
         jmp putc
 .n:     mov ah, '0'
         shr al, 1                    ; al = whole, carry = half
@@ -2049,6 +2222,8 @@ s_board:  db "PEDALBOARD      "
 s_out:    db "OUT             "
 s_saveq:  db "SAVE BOARD TO   ", "1-8   ESC=CANCEL"
 s_sw:     db "OFFON LO HI "
+s_cab3:   db "OFF4X 2X 1X "
+s_cab2:   db "--4X2X1X"
 s_ordn:   db "WAH>DIRT     ", "DIRT>WAH     ", "PHASE>DIRT   ", "DIRT>WAH>COMP", "STOCK        ", "TREM LAST    "
           db "REV>DELAY    "
 s_outn:   db "AMP 1  (CH1)    ", "AMP 2  (CH2)    ", "BOTH  (A/B/Y)   "

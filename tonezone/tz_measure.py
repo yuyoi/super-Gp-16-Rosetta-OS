@@ -76,42 +76,59 @@ def clipper(x, gain_db, hard):
     return np.clip(g * x, -1, 1) if hard else np.tanh(g * x)
 
 
+LEVELS = np.array([-60, -48, -36, -30, -24, -18, -12, -6, 0, 6])  # sine ladder, dB re playing level (+6 = a boost in front)
+I0 = int(np.where(LEVELS == 0)[0][0])
+
+
+def program(scale):
+    """the test program, peaks at `scale` (= playing level): guitar DI + a 220 Hz sine at each LEVELS step"""
+    t = np.arange(int(0.5 * SR)) / SR
+    sig = {'di': guitar_di() * scale, 'quiet': np.zeros(int(0.5 * SR))}     # same length as a sine rung
+    for lv in LEVELS:
+        sig[f's{lv}'] = scale * 10 ** (lv / 20) * np.sin(2 * np.pi * 220 * t)
+    return sig
+
+
 def measure(cap, progress=print):
-    """-> dict of features (see keys below)"""
+    """-> dict of features (see features())"""
     peak_dbfs = GUITAR_PEAK_DBU - cap.input_dbu
     scale = 10 ** (peak_dbfs / 20)
     progress(f'{cap.file}: guitar peaks at {peak_dbfs:+.1f} dBFS of the capture input')
-    di = guitar_di() * scale
-    y = cap.process(di)
-    # gain / clipping: 220 Hz sine from 30 dB below playing level up to playing level
-    t = np.arange(int(0.5 * SR)) / SR
-    levels = np.array([-60, -48, -36, -30, -24, -18, -12, -6, 0])
-    outs, thd, h_play = [], [], None
+    sig = program(scale)
+    out = {k: cap.process(v) for k, v in sig.items()}
+    return features(sig, out, scale, (cap.meta.get('tone_type') or '').lower(), peak_dbfs)
+
+
+def features(sig, out, scale, tone_type='', peak_dbfs=0.0):
+    """program() signals + what came back (a capture or the real GP-16) -> gain, clipping, voicing, loudness"""
+    di, y = sig['di'], out['di']
+    levels = LEVELS
+    outs, fund, thd, h_play = [], [], [], None
     for lv in levels:
-        x = scale * 10 ** (lv / 20) * np.sin(2 * np.pi * 220 * t)
-        yy = cap.process(x)
+        yy = out[f's{lv}']
         h = harmonics(yy, 220)
         outs.append(db(rms(yy[len(yy) // 4:])))
+        fund.append(db(h[0]))
         thd.append(np.sqrt(np.sum(h[1:] ** 2)) / max(h[0], 1e-12))
         if lv == 0:
             h_play = h
     outs = np.array(outs)
-    slope = np.polyfit(levels[-3:], outs[-3:], 1)[0]           # dB out per dB in at playing level (1 = clean, 0 = limited)
+    slope = np.polyfit(levels[I0 - 2:I0 + 1], outs[I0 - 2:I0 + 1], 1)[0]   # dB out per dB in up to playing level (1 = clean)
     small_gain = outs[0] - db(scale * 10 ** (levels[0] / 20) / np.sqrt(2))
     # knee: lowest input level whose output is already within 3 dB of the playing-level output (= gain into clipping)
-    within = np.where(outs >= outs[-1] - 3)[0]
+    within = np.where(outs >= outs[I0] - 3)[0]
     knee = float(levels[within[0]]) if len(within) else 0.0
     odd = np.sqrt(np.sum(h_play[2::2] ** 2))                   # 3rd, 5th, 7th, 9th
     even = np.sqrt(np.sum(h_play[1::2] ** 2))                  # 2nd, 4th, 6th, 8th
     hi_odd = np.sqrt(np.sum(h_play[4::2] ** 2)) / max(h_play[2], 1e-12)     # 5th.. vs 3rd: slow fall = hard clip
-    thd_play = thd[-1]
+    thd_play = thd[I0]
     if thd_play < 0.03:
         kind = 'clean'
     elif hi_odd > 0.45 or thd_play > 0.6:
         kind = 'dist'
     else:
         kind = 'od'
-    tt = (cap.meta.get('tone_type') or '').lower()
+    tt = tone_type
     if tt in ('hi_gain', 'fuzz'):
         kind = 'dist'
     elif tt in ('overdrive', 'crunch') and kind == 'clean':
@@ -132,7 +149,10 @@ def measure(cap, progress=print):
     return {'kind': kind, 'thd': float(thd_play), 'odd_even': float(odd / max(even, 1e-12)), 'hard': float(hi_odd),
             'slope': float(slope), 'small_gain_db': float(small_gain), 'drive_db': float(drive_db), 'knee_db': knee,
             'freqs': FREQS, 'voicing': voicing, 'curve': curve, 'out_rms_db': float(db(rms(y))),
-            'peak_dbfs': float(peak_dbfs)}
+            'peak_dbfs': float(peak_dbfs), 'outs_db': outs, 'thd_ladder': np.array(thd),
+            'noise_db': float(db(rms(out['quiet']))) if 'quiet' in out else -200.0,
+            'noise_fund_db': float(db(harmonics(out['quiet'], 220)[0])) if 'quiet' in out else -400.0,
+            'fund_db': np.array(fund)}                      # 220 Hz fundamental per rung: EQ after it = a constant offset
 
 
 def _match_clipper(di, thd_target, hard, scale):

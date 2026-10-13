@@ -13,7 +13,8 @@ NAME_ADDR = 0x64                        # 16-char patch name
 def midi_ports():
     import mido
     ins, outs = mido.get_input_names(), mido.get_output_names()
-    pick = lambda names: next((n for n in names if 'OCTA-CAPTURE' in n and not n.startswith('CTRL')), names[0] if names else '')
+    pick = lambda names: next((n for want in ('Focusrite', 'OCTA-CAPTURE') for n in names
+                               if want in n and not n.startswith('CTRL')), names[0] if names else '')
     return ins, outs, pick(ins), pick(outs)
 
 
