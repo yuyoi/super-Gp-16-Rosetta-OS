@@ -28,10 +28,56 @@ The GP-16 can only make what its blocks can do, so the matcher needs a model of 
 - **Payoff:** a bit-exact GP-16 VST. The same work also unlocks new algorithms on the hardware (a real cab sim, gain beyond 0x7FF).
 
 ## 2. Tone matcher: translate existing formats (user: do NOT reinvent neural capture)
-- Inputs are premade, existing formats: NAM captures (.nam, e.g. ToneHunt), cab IRs (.wav), modeler presets (e.g. Helix .hlx JSON).
-- NAM / IR: run test signals through them on the PC (NAM's own runtime), measure EQ curve, gain/clip curve and dynamics, then fit GP-16 blocks.
-- Presets: map model names + knob values onto our pedal recipes (e.g. a TS model -> TUBE SCREAMER knobs).
-- Recordings (fallback):
+
+### Format survey (2026-10-13)
+
+| Format | Open? | Library | Use for us |
+|---|---|---|---|
+| **NAM `.nam`** (Neural Amp Modeler) | yes: JSON spec, MIT code | TONE3000 (ex-ToneHunt), very large, amps **and pedals** | **primary**: run it locally, measure, fit GP-16 blocks |
+| Cab IR `.wav` | yes (plain WAV) | everywhere, TONE3000 too | cab / amp EQ: fit the 4-band EQ + LINE OUT filter (B6 amps) |
+| AIDA-X / GuitarML Proteus (RTNeural JSON) | yes, no formal spec | smaller | secondary; community converters exist |
+| Helix `.hlx`, BOSS `.tsl` presets | JSON, undocumented | big | translate by model name + knob values (no audio), later |
+| ToneX, Kemper, Quad Cortex captures | no documented open format | big | skip (vendor-locked) |
+
+**NAM details**
+- `.nam` = JSON: `version`, `architecture` (WaveNet, LSTM, SlimmableContainer "A2", Sequential), `config`, flat `weights`,
+  optional `sample_rate` (default 48 kHz).
+- `metadata` carries what the translator needs to route a capture:
+  - `gear_type`: amp / pedal / pedal_amp / amp_cab / amp_pedal_cab / preamp / studio;
+  - `tone_type`: clean / overdrive / crunch / hi_gain / fuzz;
+  - `gear_make` / `gear_model` (free text, e.g. "Ibanez" / "TS808" -> our TUBE SCREAMER as the starting point);
+  - `input_level_dbu` / `output_level_dbu` (calibrated levels -> correct drive and loudness).
+- Runtimes:
+  - Python `neural-amp-modeler` (the reference, needs PyTorch);
+  - Rust `nam-rs` (loads all architectures, light);
+  - C++ NeuralAudio / NAM Core;
+  - or our own numpy WaveNet/LSTM from the spec (`_export_weights` layout).
+- TONE3000 API v1 (`https://www.tone3000.com/api/v1`):
+  - search `/tones/search` with `gears=pedal|amp`, `format=nam|ir` and `makes`; model files via `/models?tone_id=` -> `model_url`;
+  - OAuth 2.0 PKCE or a secret key, 100 req/min;
+  - every tone carries a `license` (t3k / cc-by / cc-by-nc / cc0);
+  - free tier = non-commercial only, which fits (free, MIT, the user downloads the captures, we never redistribute them).
+  - Example app: github.com/tone-3000/t3k-api.
+
+### How a capture becomes a GP-16 sound
+1. **Route by metadata.**
+   - pedal -> an A2 dirt recipe (plus EQ);
+   - amp / amp_cab -> a RIG pair (dirt + an amp with EQ + LINE OUT);
+   - IR -> amp EQ + cab;
+   - `tone_type` picks the starting block: fuzz/hi_gain -> DIST, overdrive/crunch -> OD.
+2. **Measure the capture** (render offline):
+   - sine sweeps at several input levels -> small-signal EQ curve + gain / clipping curve (hard vs soft) + compression;
+   - a DI guitar loop -> long-term spectrum + loudness.
+3. **Fit**, using the GP-16's real tables:
+   - EQ bands from the firmware Hz tables (4 bands + out);
+   - drive from the gain curve, DIST vs OD from the clip shape, level from loudness;
+   - LINE OUT bands for cab captures.
+4. **Close the loop on the real unit (most accurate, no DSP emulator needed).**
+   - The PC sets the parameters over SysEx, plays the same DI through the GP-16 (OCTA loop), records, compares with the NAM output and nudges the parameters.
+   - It repeats until the error stops falling.
+5. **Output:** a USER pedal / amp recipe with knobs (loaded over MIDI, see 3), or baked into the ROM list.
+
+### Recordings (fallback)
 
 - **Best input:** a matched pair, your DI plus the target played the same way (re-amp, or play along with the record).
 - **Recording only:** match the long-term spectrum, dynamics and harmonic profile against your own DI of the same riff.
@@ -74,3 +120,9 @@ The GP-16 can only make what its blocks can do, so the matcher needs a model of 
 ## Notes
 - SysEx is parsed while the OS screens run: service F6A1:03BC calls the parser EE11:0C82, so the debug port (memory write cmd 06) can fill USER slots without leaving the OS.
 - Build order agreed: v2 voicings first (stable, not over-modernized), then loader + USER slots.
+
+## Status 2026-10-13: GP Tone Zone v0.1 built (`tonezone/`)
+- Reads NAM (WaveNet/LSTM, old 0.5.x files upgraded) through NAM's own vendored runtime, and cab IR WAVs.
+- Measures clipping, knee gain, voicing (minus a generic clipper's tilt) and loudness; fits the GP-16 EQ from the firmware tables.
+- Pushes to the unit over MIDI; saves to the library; Add to OS build (`re/tz_sounds/*.json`, merged by gen_pedal_data).
+- Tested on NAM's example captures; the push was tested against a fake unit only. The hardware audition and the loop refine are next.

@@ -138,6 +138,14 @@ KNOBS = {
  'ross':         [('LVL', [(0x12, 0, 100)]), ('SUS', [(0x11, 0, 100), (0x0F, 55, 35)])],
  'squeezer':     [('SQZ', [(0x11, 10, 80), (0x10, 50, 15)]), ('LVL', [(0x12, 0, 100)])],
  'smallclone':   [('RAT', [(0x34, 0, 100)]), ('DEP', [(0x35, [40, 85]), (0x36, [55, 65])], 1, 4)],
+ 'detroit':      [('DRV', [(0x17, 30, 90)]), ('TON', [(0x16, 30, 75), (0x24, db(-3), db(+5))]),
+                  ('ROM', [(0x56, 0, 35), (0x32, 0, 40)]), ('VOL', [(0x19, 30, 100)])],    # ROM = plate + double-track
+ 'flood1':       [('GAN', [(0x14, 50, 100)]), ('SCP', [(0x27, db(-2), db(-12)), (0x24, db(+2), db(+6))]),   # deeper V
+                  ('LOW', [(0x2C, db(0), db(+10))]), ('VOL', [(0x15, 20, 100)])],
+ 'flood2':       [('GAN', [(0x14, 50, 100)]), ('MID', [(0x27, db(-6), db(+6))]),
+                  ('DLY', [(0x4B, 0, 70), (0x4E, 10, 50)]), ('AMB', [(0x56, 0, 60)])],
+ 'holywar':      [('GAN', [(0x14, 40, 100)]), ('BRK', [(0x27, db(0), db(+8))]),
+                  ('TGT', [(0x2C, db(0), db(-8)), (0x2A, db(0), db(-6))]), ('VOL', [(0x15, 20, 100)])],
  'dimc':         [('MOD', [(0x36, [0, 50, 55, 60, 65]), (0x32, [0, 20, 25, 30, 35]), (0x34, [15, 15, 20, 25, 35]),
                            (0x35, [0, 25, 35, 45, 55]), (0x33, [20, 20, 25, 30, 35]), (0x31, [8, 8, 10, 12, 14])], 4, 5, 2)],
 }
@@ -151,6 +159,9 @@ AMP_KNOBS = {
  'radio':  [('TUN', [(0x28, 20, 80), (0x25, 30, 90)]), ('VOL', [(0x5B, 40, 100)])],
  'jc120':  [('VOL', [(0x5B, 40, 100)]), ('TRB', [(0x58, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('BAS', [(0x5A, 0, 100)])],
  '5150':   [('PRS', [(0x57, 0, 100)]), ('BAS', [(0x5A, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('TRB', [(0x58, 0, 100)])],
+ 'superlead': [('PRS', [(0x57, 0, 100)]), ('BAS', [(0x5A, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('TRB', [(0x58, 0, 100)])],
+ 'randall':   [('VOL', [(0x5B, 40, 100)]), ('TRB', [(0x58, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('BAS', [(0x5A, 0, 100)])],
+ 'jcm800rip': [('PRS', [(0x57, 0, 100)]), ('BAS', [(0x5A, 0, 100)]), ('MID', [(0x59, 0, 100)]), ('TRB', [(0x58, 0, 100)])],
 }
 
 # ---------------------------------------------------------------- BOARD mode
@@ -160,7 +171,8 @@ SLOTS = ['A1 COMP', 'A2 DIRT', 'A3 WAH/FILTER', 'A4 PHASER', 'A5 EQ', 'A6 GATE',
 HOME = {}
 for k in ('dynacomp', 'cs3', 'ross', 'squeezer'): HOME[k] = 0
 for k in ('tubescreamer', 'rat', 'ds1', 'bigmuff', 'metalzone', 'sd1', 'klon', 'fuzzface', 'metalmuff', 'funeral',
-          'ironman', 'hm2', 'rangemaster', 'od1', 'fuzzfactory', 'octavia', 'ramshead', 'greenrussian'): HOME[k] = 1
+          'ironman', 'hm2', 'rangemaster', 'od1', 'fuzzfactory', 'octavia', 'ramshead', 'greenrussian', 'detroit', 'flood1',
+          'flood2', 'holywar'): HOME[k] = 1
 for k in ('crybaby', 'resowah', 'touchwah'): HOME[k] = 2
 for k in ('phaser', 'slicer'): HOME[k] = 3
 HOME['ge7'] = 4; HOME['ns2'] = 5
@@ -210,9 +222,41 @@ NAMES = {  # display names, <= 13 chars (rig rows use 3 for the label)
  'ramshead': "RAM'S HEAD", 'greenrussian': 'GREEN RUSSIAN', 'mistress': 'ELEC MISTRESS', 'ce1': 'CE-1',
  'whammy': 'WHAMMY', 'memoryman': 'MEMORY MAN', 'shoegaze': 'SHOEGAZE WASH', 'ross': 'ROSS COMP',
  'squeezer': 'OR SQUEEZER', 'smallclone': 'SMALL CLONE', 'dimc': 'DIMENSION C',
+ 'detroit': 'DETROIT', 'flood1': 'FLOOD 1', 'flood2': 'FLOOD 2', 'holywar': 'HOLYWAR',
  'clean': 'CLEAN', 'twin': 'TWIN', 'jcm800': 'JCM800', 'ac30': 'AC30', 'doom': 'DOOM', 'di': 'DI / FLAT',
- 'radio': 'RADIO', 'jc120': 'JC-120', '5150': '5150',
+ 'radio': 'RADIO', 'jc120': 'JC-120', '5150': '5150', 'superlead': 'SUPER LEAD', 'randall': 'RANDALL',
+ 'jcm800rip': 'JCM800 RIP',
 }
+
+
+# ---------------------------------------------------------------- GP Tone Zone sounds (tonezone/ "Add to OS build")
+TZ_DIR = os.path.join(here, 'tz_sounds')
+
+
+def _tz_merge():
+    """re/tz_sounds/*.json (written by tonezone/tz_gp16.add_to_os) -> appended after the built-in pedals / amps"""
+    import json
+    if not os.path.isdir(TZ_DIR):
+        return []
+    added = []
+    for f in sorted(os.listdir(TZ_DIR)):
+        if not f.endswith('.json'):
+            continue
+        with open(os.path.join(TZ_DIR, f), encoding='utf-8') as fp:
+            d = json.load(fp)
+        key = 'tz_' + os.path.splitext(f)[0]
+        rec = {int(a, 16): int(v) for a, v in d['recipe'].items()}
+        knobs = [tuple([lab, [tuple(t) for t in tg]]) for lab, tg in d['knobs']]
+        NAMES[key] = d['name'][:13]
+        if d['kind'] == 'amp':
+            P.AMPS[key], AMP_KNOBS[key] = rec, knobs
+        else:
+            P.PEDALS[key], KNOBS[key], HOME[key] = rec, knobs, 1
+        added.append(f'{d["name"]} ({d["kind"]})')
+    return added
+
+
+TZ_ADDED = _tz_merge()
 
 
 def pairs_of(rec):
@@ -360,6 +404,8 @@ if __name__ == '__main__':
            f'NPED equ {len(P.PEDALS)}', f'NAMP equ {len(P.AMPS)}', f'KS_BASE equ 0x{KS_BASE:04x}',
            f'KS_USED equ 0x{ks[0]:04x}'] + body
     open(os.path.join(here, 'pedal_data.inc'), 'w').write('\n'.join(out) + '\n')
+    if TZ_ADDED:
+        print('GP Tone Zone sounds:', ', '.join(TZ_ADDED))
     print(f'pedal_data.inc: {len(P.PEDALS)+1} pedals, {len(P.AMPS)+1} amps, knob data {len(pk)+len(ak)} B, '
           f'stores {ks[0]-KS_BASE} B, magic {magic:#04x}')
     for k in ('bigmuff', 'leslie', 'tubescreamer', 'ce1', 'memoryman', 'shoegaze', 'fuzzfactory', 'dimc'):

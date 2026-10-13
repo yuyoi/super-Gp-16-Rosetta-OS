@@ -206,12 +206,29 @@ PEDALS = {
  'squeezer': R(on('comp'), COMP(+10, 70, 40, 60)),            # JFET, gentle, mid-forward
  'smallclone': R(on('mod', b2='chorus'), CHORUS(5, 30, 40, 55)),
  'dimc': R(on('mod', 'sdly', b2='chorus'), CHORUS(25, 20, 35, 55), SDLY(10, 25)),   # DC-2: chorus + doubler width
+ # --- signature tones (user picks 2026-10-13) ---
+ # Ace Frehley, Detroit Rock City solo ('76 Destroyer): Les Paul into a cranked Marshall Super Lead -- plexi mid push,
+ # crunch-to-lead OD, light double-track (B1) and a touch of plate (B5), both grabbed only if free
+ 'detroit': R(on('dirt', 'eq', 'ns', 'sdly', 'rev', od=True), OD(+5, 65, 60, turbo=1),
+              EQ(hi=(3500, +2), hm=(900, +4, 1.0), lm=(400, 0, 1.0), lo=(100, -2)), NS(20),
+              SDLY(18, 25), REVERB(15, 6, 5000, 10, 15)),
+ # Dimebag rhythm (Trendkill era): Randall solid-state gain, MXR 6-band V (750 Hz scoop), tight Rocktron-style gate
+ 'flood1': R(on('dirt', 'eq', 'ns'), DIST(+15, 90, 50),
+             EQ(hi=(4000, +5), hm=(750, -9, 1.2), lm=(250, +1, 1.0), lo=(100, +5)), NS(55, 15)),
+ # Dimebag, Floods outro solo: same rig, mids back for singing leads, long delay (B4) + big hall (B5)
+ 'flood2': R(on('dirt', 'eq', 'ns', 'dly', 'rev'), DIST(+10, 95, 50),
+             EQ(hi=(4000, +3), hm=(900, 0, 1.0), lm=(300, 0, 1.0), lo=(100, +3)), NS(40, 30),
+             TAP(420, 40, fb=35, cutf=3000), REVERB(35, 4, 4000, 20, 30)),
+ # Dave Mustaine, Holy Wars (Rust in Peace '90): boosted JCM800 -- tight, lows trimmed, ~1.2 kHz bark, crisp attack
+ 'holywar': R(on('dirt', 'eq', 'ns'), DIST(+20, 75, 50),
+              EQ(hi=(4500, +4), hm=(1200, +4, 1.2), lm=(250, -3, 1.0), lo=(80, -4)), NS(45, 25)),
 }
 
 # Level trims (EQ OUT, dB; tone unchanged). User 2026-10-13: "every fuzz is loud now except the funeral" = the fuzzes
 # are right, bring Funeral up to them (NOT the fuzzes down); then "louder funeral and ts etc, a little eq gain" = the
 # overdrives up to the fuzz level too. re/level_match.py estimates loudness from the recipes.
-TRIM = {'tubescreamer': 5.0, 'sd1': 6.0, 'klon': 5.0, 'ironman': 4.0, 'rangemaster': 4.5, 'od1': 5.5}   # overdrives up to the fuzz level; Funeral's level = its VOL knob (boost range)
+TRIM = {'tubescreamer': 5.0, 'sd1': 6.0, 'klon': 5.0, 'ironman': 4.0, 'rangemaster': 4.5, 'od1': 5.5, 'detroit': 3.5,
+        'flood2': -2.0}   # overdrives up to the fuzz level; Funeral's level = its VOL knob (boost range)
 for _k, _t in TRIM.items():
     PEDALS[_k][0x2D] = db((PEDALS[_k].get(0x2D, 24) - 24) / 2 + _t)
 
@@ -235,6 +252,13 @@ AMPS = {
             LINE(60, 62, 50, 45, 80)),                        # flat, glassy
  '5150': R(on('eq', 'amp'), EQ(hi=(4500, +3), hm=(2500, +4, 1.2), lm=(500, -4, 1.0), lo=(80, -3)),
            LINE(70, 58, 45, 55, 80)),                         # tight lows, upper-mid bite
+ # signature amps: RIG mode = signature pedal (drive + effects) + its amp (the player's EQ + cab)
+ 'superlead': R(on('eq', 'amp'), EQ(hi=(3500, +2), hm=(900, +4, 1.0), lm=(400, 0, 1.0), lo=(100, -2)),
+                LINE(60, 60, 62, 45, 80)),                    # Ace '76: Marshall Super Lead 100 + greenback 4x12
+ 'randall': R(on('eq', 'amp'), EQ(hi=(4000, +5), hm=(750, -9, 1.2), lm=(250, +1, 1.0), lo=(100, +5)),
+              LINE(70, 62, 35, 62, 80)),                      # Dime: Randall RG100ES, MXR 6-band V, big bottom
+ 'jcm800rip': R(on('eq', 'amp'), EQ(hi=(4500, +4), hm=(1200, +4, 1.2), lm=(250, -3, 1.0), lo=(80, -4)),
+                LINE(68, 60, 58, 45, 80)),                    # Mustaine Rust in Peace: tight JCM800, upper-mid bark
 }
 
 

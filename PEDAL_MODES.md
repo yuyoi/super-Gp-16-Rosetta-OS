@@ -141,3 +141,11 @@ Board memories 1-8 (WRITE saves, BOARD MEMORY page loads). All voicings are ear-
 
 ## v2.0 (2026-10-13): voicings redone from the original circuits
 All recipes now written in real units (Hz / dB / Q / ms) from the firmware's own EQ tables; old EQ frequencies were off. Knobs do what the originals do (Muff/DS-1 TONE = tilt, RAT FILTER = low-pass, Klon GAIN adds mid bump, TS TONE = treble). Vintage references, not modern takes. Still ear-tune targets.
+
+## v2.3 signature pedals (A2 DIRT)
+- DETROIT: Ace Frehley, Detroit Rock City solo. Knobs DRV, TON, ROM (plate + double-track), VOL.
+- FLOOD 1: Dimebag rhythm. GAN, SCP (V-scoop depth + sizzle), LOW, VOL.
+- FLOOD 2: Dimebag, Floods outro solo. GAN, MID, DLY (level + feedback), AMB (hall).
+- HOLYWAR: Dave Mustaine, Holy Wars. GAN, BRK (mid bark), TGT (tightness: lows + low-mids cut), VOL.
+Signature amps for RIG mode: SUPER LEAD (DETROIT), RANDALL (FLOOD 1/2), JCM800 RIP (HOLYWAR).
+User: no Hendrix, no Floyd.

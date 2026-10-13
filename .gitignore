@@ -18,3 +18,9 @@ make_gp16_def.py
 # local backup copies of older sources (git history has them)
 re/pedals_v*.py
 re/gen_pedal_data_v*.py
+# tonezone: vendored runtime, downloaded captures, your fitted sounds (captures carry their own licenses)
+tonezone/_vendor/
+tonezone/captures/
+tonezone/captures_test/
+tonezone/library/
+re/tz_sounds/
