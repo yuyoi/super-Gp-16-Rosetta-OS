@@ -379,3 +379,11 @@ make loud noise, but they can't damage anything (the DSP only computes).
   the engine ISR's FIRST act was `test [si],al` = a DSP STATUS READ, done every tick BEFORE the hold check. That read
   lands inside the firmware's DSP transaction and jams its poll. Real fix: check the hold byte at the very TOP of the
   ISR and, when held, touch the DSP not at all (no status read, no commit) -- freeze A, re-arm the tick, FINT/RETRBI.
+- 2nd fix (hold byte at ISR top, no DSP touch) ALSO hung ("same shit"). Working theory now: the M60014 gate array
+  cannot take ANY CPU interrupt in the middle of a DSP access sequence -- even a do-nothing engine interrupt inserts a
+  bus cycle that corrupts the firmware's untimed poll. A flag the engine CHECKS is not enough; the engine's timer must
+  be truly MASKED so it cannot fire. v2.8 rework (not yet burned): REV_HOLD/REV_GO entries mask/unmask TMIC0 (engine
+  timer) around every OS dispatch (mloop brackets SERVICE); the engine runs only in the idle wait. Plus breadcrumbs:
+  ST_REVPH (DS CE48) written at each setup phase (0x10-0x12 hook, 0x20-0x25 rev_now/engine) -- after a hang, dump RAM
+  and read CE48 for the exact point. Reverted the unit to v2.7 meanwhile. emu_v28 checks the breadcrumb hits 0x25 and
+  TMIC0 toggles 0x56/0x16.

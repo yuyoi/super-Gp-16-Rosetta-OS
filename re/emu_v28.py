@@ -41,10 +41,9 @@ def rn(uc, a, s, u): st['revnow'] += 1
 def hk(uc, a, s, u): st['hook'] += 1
 mu.hook_add(UC_HOOK_CODE, rn, None, REVP + 0, REVP + 0)
 mu.hook_add(UC_HOOK_CODE, hk, None, REVP + 6, REVP + 6)
-st['holdv'] = set()
-def hold_w(uc, acc, addr, size, val, ud): st['holdv'].add(val & 0xFF)
-mu.hook_add(UC_HOOK_MEM_WRITE, hold_w, None, 0x6E47, 0x6E47)
-mu.hook_add(UC_HOOK_MEM_WRITE, hold_w, None, 0x106E47, 0x106E47)
+st['tmic0'] = set()
+def tmic0_w(uc, acc, addr, size, val, ud): st['tmic0'].add(val & 0xFF)
+mu.hook_add(UC_HOOK_MEM_WRITE, tmic0_w, None, 0x40F9C, 0x40F9C)
 
 def final(c, s):
     """last commit-0 instruction and last commit-8 coefficient of a step, from the whole log"""
@@ -72,8 +71,11 @@ def vec(n):
     b = mu.mem_read(4 * n, 4)
     return int.from_bytes(b[2:4], 'little'), int.from_bytes(b[0:2], 'little')
 
-def t0_on(): return st['t0'][-2:] == [(0x90, 0x80), (0x9C, 0x16)] if st['t0'] else False
-def t0_off(): return bool(st['t0']) and st['t0'][-1] == (0x90, 0x50)
+def _tmc0():                         # last write to TMC0 (0x90); the mask/unmask only touches TMIC0 (0x9C)
+    w = [v for a, v in st['t0'] if a == 0x90]
+    return w[-1] if w else None
+def t0_on(): return _tmc0() == 0x80   # timer running (whether or not its interrupt is momentarily masked)
+def t0_off(): return _tmc0() == 0x50
 
 MEMW = [0x039, 0x041, 0x048, 0x05D, 0x0B6, 0x0C0, 0x0C4, 0x0CC, 0x0D0, 0x0D7, 0x0DB, 0x0EC, 0x0F9, 0x10C, 0x119,
         0x126, 0x136]
@@ -114,7 +116,8 @@ SCRIPT = [
     C(lambda: eq('span 92 BPM 1/4 (41713) and amax = 0120 + span', (bank6('cw'), bank6('dw')), (41713, 0x120 + 41713))),
     C(lambda: check(f'timer 0 on (TMC0 80, TMIC0 16): {st["t0"][-3:]}', t0_on())),
     C(lambda: eq('ST_REVON', rd(0xCE45)[0], 1)),
-    C(lambda: eq('menu-hold byte toggles (engine skips its DSP write during OS dispatch)', sorted(st['holdv']), [0, 1])),
+    C(lambda: eq('engine-setup breadcrumb reached 0x25 (engine running)', rd(0xCE48)[0], 0x25)),
+    C(lambda: check('OS masks (0x56) and unmasks (0x16) the engine timer around dispatch', 0x56 in st['tmic0'] and 0x16 in st['tmic0'])),
     # knob page
     ('key', 0x0F), lcdh('REV 6-knob screen', 'BP NT MX F  T  L', ' 92  410 4  6  8'),
     C(lambda: S.update(n=st['revnow'], h=st['hook'])),

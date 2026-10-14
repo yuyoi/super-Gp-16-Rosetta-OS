@@ -115,12 +115,13 @@ FAR_CAB  equ 9
 REVSEG   equ 0xf301          ; v2.8 rev_blob.bin at ROM 0x13010 (dead stock range wiped by v2.7): REVERSE DELAY
 REV_NOW  equ 0
 REV_STOP equ 3
+REV_HOLD equ 9               ; mask the engine timer while the OS touches the DSP
+REV_GO   equ 12             ; unmask it for the idle wait
 REVT     equ 0xfc            ; knob table target = reverse setting (2 B: REVT, which) -> ST_RV[which], mloop sets up
 D_BPM    equ 7               ; knob disp: BPM = 40 + k, 3 digits
 D_NOTE   equ 8               ; knob disp: note value name (s_note)
 ST_RV    equ 0xce40          ; 4 B: BPM-40, note, mix, level (rev_blob.asm reads them)
 ST_REVP  equ 0xce44          ; 1 = reverse (re)start due (written by mloop once the sound change is done)
-ST_REVHOLD equ 0xce47        ; 1 = OS busy: the reverse engine skips its DSP write (set around all dispatch)
 
 %macro farcall 2
         db 0x9a
@@ -151,7 +152,7 @@ menu_sys:
         call to_split
 
 mloop:
-        mov byte [ST_REVHOLD], 0     ; idle wait: the engine may write the DSP (nothing else does during SERVICE)
+        farcall REVSEG, REV_GO       ; idle wait: let the engine run (nothing else touches the DSP during SERVICE)
         xor ax, ax
         cmp byte [ST_STATE], 3
         je .svc
@@ -159,7 +160,7 @@ mloop:
 .svc:   push ax
         farcall F6A1_SEG, SERVICE
         add sp, 2
-        mov byte [ST_REVHOLD], 1      ; dispatch (keys, apply, redraw, exit): the engine must not touch the DSP
+        farcall REVSEG, REV_HOLD     ; dispatch (keys, apply, redraw, exit): the engine timer is masked, cannot fire
         cmp byte [ST_CABP], 0        ; cab coefficients due, and the sound change is done
         je .ncab
         test byte [SNDREQ], 0x20

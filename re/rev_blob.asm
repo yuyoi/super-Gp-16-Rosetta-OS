@@ -21,10 +21,10 @@ ST_PED   equ 0xcf30
 ST_RV    equ 0xce40                  ; 4 B: knob positions BPM-40, note, mix 0-10, level 0-10
 ST_REVON equ 0xce45                  ; 1 = engine running
 ST_REVMEM equ 0xce46                 ; 1 = borrowed memory / dry cancel written: unborrow before anything else plays
-ST_REVHOLD equ 0xce47                ; OS view (DS FA00): 1 = OS busy, engine must not touch the DSP this tick
-HOLD_SS  equ 0x0247                  ; same byte in the engine's SS = 06C0 (FA00:CE47 == 06C0:0247): menu-hold flag
+ST_REVPH equ 0xce48                  ; breadcrumb: last reverse-setup phase reached (readable after a hang)
 BOOTI    equ 0x14c4                  ; DS: chip 2 boot instructions, 3 B per step (set_coef E83B:06CC reads them)
 REVSEG   equ 0xf301
+TMIC0    equ 0x9c                    ; 40F0:9C timer-0 interrupt control (0x16 = run bank 6 pri 6, 0x47 = masked/stop)
 WBASE    equ 0x0100                  ; tap write address (borrowed memory)
 AMIN     equ 0x0120                  ; shortest read offset (1 ms)
 SPANMAX  equ 0xffbf - AMIN           ; longest chunk x 2 (1019 ms)
@@ -34,14 +34,36 @@ MD0      equ 82                      ; 83 counts = 62.25 us; the PLL toggles 82 
         jmp near rev_now             ; +0
         jmp near rev_stop            ; +3
         jmp near hook_load           ; +6  (F6A1:0382 jumps here)
+        jmp near rev_hold            ; +9   mask the engine timer for the duration of OS dispatch
+        jmp near rev_go              ; +12  unmask it for the idle wait
+
+; ---------------------------------------------------------------- menu hold: the gate array cannot take ANY interrupt
+; mid-DSP-transaction, so a flag the engine merely checks is not enough -- the engine's timer must be truly masked
+; while the OS touches the DSP. Only toggles when the engine is actually running.
+rev_hold:
+        cmp byte [ST_REVON], 0
+        je .r
+        push es
+        mov ax, 0x40f0
+        mov es, ax
+        or byte [es:TMIC0], 0x40     ; mask timer 0: the engine interrupt cannot fire now
+        pop es
+.r:     retf
+rev_go:
+        cmp byte [ST_REVON], 0
+        je .r
+        push es
+        mov ax, 0x40f0
+        mov es, ax
+        mov byte [es:TMIC0], 0x16    ; timer 0 back: bank 6, priority 6, unmasked
+        pop es
+.r:     retf
 
 ; ---------------------------------------------------------------- the engine (bank 6: DS = 8000, ES = 40F0,
 ; AL = 1, BX = A, BP = step, DX = amax, CX = span, SI = 0, DI = 0x1872 = commit address of chip 2 step 0x072)
-isr:    cmp byte [ss:HOLD_SS], 0     ; OS busy (any menu dispatch): touch the DSP NOT AT ALL -- not even the status
-        jz .run                      ; read below -- or the read lands inside the firmware's own DSP poll and jams it
-        mov word [es:0x82], MD0      ; (sound kept playing, controls died). Freeze A, keep the tick steady, leave.
-        jmp .out
-.run:   test [si], al                ; busy: early
+; The OS masks this timer (TMIC0) for the whole time it touches the DSP, so the engine cannot fire mid-transaction --
+; that is the real fix (a flag the engine checks still lets the interrupt fire, which the gate array cannot take).
+isr:    test [si], al                ; busy: early
         jz .late
         mov word [es:0x82], MD0 + 1
         mov ah, 12
@@ -98,8 +120,11 @@ rev_stop:
         retf
 
 hook_load:                           ; LOADBUF entry (patched to jmp far here): engine off, the program back to stock
+        mov byte [ST_REVPH], 0x10    ; breadcrumb: entered the sound-change hook
         call stop_core               ; (the sound change rewrites tap times + C levels itself, not instructions),
+        mov byte [ST_REVPH], 0x11
         call unborrow                ; then the 8 bytes we replaced
+        mov byte [ST_REVPH], 0x12
         push bp
         mov bp, sp
         db 0x9a
@@ -285,13 +310,15 @@ rev_now:                             ; mloop, once the sound change is done: (re
 .p:     cmp byte [ST_PED], REV_PED
         je .go
         jmp .x
-.go:    mov byte [ST_REVMEM], 1      ; set first: whatever got written is undone on the next stop
+.go:    mov byte [ST_REVPH], 0x20    ; breadcrumb: rev_now, REV is the pedal
+        mov byte [ST_REVMEM], 1      ; set first: whatever got written is undone on the next stop
         mov si, memw                 ; 1. borrowed memory
         mov di, NMEMW
 .m:     call dspw
         add si, RECSZ
         dec di
         jnz .m
+        mov byte [ST_REVPH], 0x21
         mov al, [ST_RV + 2]          ; 2. MIX k 0-10 -> chain B dry gain 2047 - 4095 k / 10 (k 10 = -2048 = -1.0)
         cmp al, 10
         jbe .mx
@@ -321,6 +348,7 @@ rev_now:                             ; mloop, once the sound change is done: (re
         xor dx, dx
         mov si, lvbw
         call dspc
+        mov byte [ST_REVPH], 0x23
         mov bl, [ST_RV + 1]          ; 4. chunk: span = notes[n] / BPM, halved until it fits the memory
         cmp bl, NNOTE - 1
         jbe .nt
@@ -346,7 +374,9 @@ rev_now:                             ; mloop, once the sound change is done: (re
         shr ax, 1
         jmp .f
 .sp:    mov cx, ax                   ; cx = span
+        mov byte [ST_REVPH], 0x24
         call engine_start
+        mov byte [ST_REVPH], 0x25    ; breadcrumb: engine running (a hang after this is in the menu, not setup)
 .x:     pop bx
         pop di
         pop si
