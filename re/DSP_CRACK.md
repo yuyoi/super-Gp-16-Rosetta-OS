@@ -180,3 +180,179 @@ make loud noise, but they can't damage anything (the DSP only computes).
     - Map the write side of a delay line (which step writes at 2100).
     - EQ/biquad dataflow on 1:0A4-0BD with the HI band active.
     - Cab sim from custom coefficients in the existing EQ bands.
+
+## REVERSE (2026-10-13): write forwards, read backwards
+- **Pitch shifter (B2 MOD, PITCH):** one oscillator step 1:152 `008008`, coef = 2048 * (1 - ratio) (ROM table DS:355A,
+  2401 entries = -12..+12 st in cents; -12 st 0x400, +12 st 0x800). Measured: coef 0x400 -> 221 Hz, 0x200 -> 331 Hz
+  from 440. `008008` is an oscillator with its own phase (1:163 tremolo is the same instruction); copies elsewhere are
+  idle oscillators; no shift bits (sweep of all 24 bits: only bits 0-3 and 19 matter, both stop it); coefficient top 4
+  bits ignored. Read heads: depth steps 2:003 `51ffcf` and 2:01b `51fe0c` (coef 0x7FF in pitch mode; halving both
+  -> 385 Hz exactly). The B2 block is ONE modulated-delay program for chorus / flanger / pitch / Dimension (0
+  instruction rewrites between them). Read speed caps at 1x -> no reverse inside the DSP so far (needs 2x).
+- **Tap delay C tap:** chip 2 step 0x072 `00ffff`, read address = A field, A = 0x69FF + 32 * ms (0x69FF..0xFFFE =
+  0..1200 ms; 1 unit = 1 sample). Written by commit 1.
+- **Commit 1 takes only the A latch:** with the instruction, coefficient, B and reg3 latches poisoned (0), A + commit 1
+  moved the echo 302 -> 502 ms, level intact (`committest.py`). So an address move = 3 bus writes ([1], [0], commit).
+- **CPU-driven reverse works** (`rev_isr.asm` + `revload.py`, hot-loaded into RAM 06C0:0000 over the debug port,
+  timer 0 / vector 28, no burn): the read address grows 2 per DSP sample, so the read head runs backwards. v2 follows
+  real time (timer 1 count * k, k = 2 * 32000 / 1333333 * 65536 = 3146), so dropped ticks don't change the speed:
+  a 440 Hz tone comes back at exactly 440 (v1, tick-counted, gave 113 Hz = quarter speed). A decaying ding comes back
+  as a rising swell with a hard cut (chunk 250 ms). REVERSE VERB = B order REV>DELAY (6,7,8,10,9) + hall into the tap.
+- **CPU limits:** V25 8 MHz, timer clock 8 MHz / 6. Ticks delivered: 99% at 4 kHz, 93% at 7.9 kHz, 63% at 15.9 kHz
+  (the ISR + busy bus). At 8-16 kHz the main loop slows enough that long debug-port messages (peek, RQ1) are lost;
+  ping still answers. Next: slimmer ISR (register-bank interrupt, no mul), crossfade at the wrap (second tap), then a
+  REVERSE DELAY / REVERSE VERB pedal in the OS (far code in the v2.7 free space).
+- **Timer 0 is free** (TMC0 0x50 stopped, TMIC0 masked, vector 28 = dummy IRET); timer 1 = MD1 0x535 (1 kHz system tick,
+  vectors 29/30, TMIC1/TMIC2 priority 7). P0 bit 0 toggles fast (candidate DSP end-of-sample line, unconfirmed).
+- **REVERSE v5 "locked" (`rev_lock.asm`, `revlock.py`, `vec_stubs.asm`):** back-to-back commits complete exactly every
+  2 DSP frames (`clocktest.py`: 41.69 timer counts = 31.98 kHz), so the fastest address update is every 2 frames;
+  timer 0 is phase-locked to the busy flag. The firmware's 1 ms ISRs (vectors 29/30) kept their ISPR bit set for their
+  whole run and the V25 then took no other interrupt at any priority: 14% of the ticks were lost (pitch sank). RAM
+  stubs FINT first, then jump to the stock ISR: 16,064 ticks/s, zero loss. Remaining artifact: the read head steps
+  +1/-3 -> a mirror at 16 kHz - f, ~25 dB under the signal, which no stock filter removes (the tap's cut filter sits
+  before the delay line). P0.0 is not the DSP frame clock.
+- **Tap delay block 0x0E params:** p53 C time (2:072 commit 1), p54/55 L/R time, p56 C level, p57 L level, p58 R level,
+  p59 feedback, p60 cut filter (setter E980:34D8 writes 2:089/08A/08B from a table: those are the cut filter, NOT the
+  wet return as noted above). C level writes 2:076 + 2:07C (instr 090038), coef = level * 1024 / 100.
+- **On 2:076/07C the coefficient acts as 11-bit:** 0x400 (level 100) = full scale, 0x7FF wraps to ~0 (wet -32..-40 dB
+  on the loop), 0xC00 == 0x400. No wet boost from that coefficient. 2:075 (R-level MAC, instr 09ffc0) feeds output A.
+- **One shared commit pipeline (2026-10-14, `chippar.py`):** back-to-back commit 1 to unused steps, waiting for busy
+  each time: chip 2 only, chip 2/chip 0 alternating and chip 2/chip 1 alternating all take exactly 2 frames per commit.
+  The instruction/coefficient/A latches are shared by all three chips, so the gate array serializes every commit:
+  no extra read heads by spreading them over chips.
+- **Pitch shifter depth steps 2:003/2:01b (`pitchx2.py`, loop, PITCH -5 st = 330 Hz):** the depth coefficient is a
+  linear scale on the oscillator's delay rate (0x7FF -> 330 Hz, 0x400 -> 385.6 Hz exactly). Bits 21 and 22 do nothing
+  on these steps (they are x0.5 shifts in the 14 and 09 families, not here). Bit 20 or 19 breaks the modulation
+  (418/242 Hz). Bit 23 splits it into two pitches (358/296 Hz at 0x7FF, 412/358 at 0x400): probably the crossfade
+  window, not a gain. So the shifter's delay rate = oscillator coef (max ~1.0) x depth (max 1.0) caps at 1 sample per
+  sample: no native reverse from it. The way left: a custom program in chip 2's free steps (~0x17D-0x1FF) whose read
+  offset is the SUM of two oscillators (2 samples per sample). That needs the modulated-read decode (how 2:003 takes
+  the oscillator output as its address offset).
+
+## DSP-NATIVE REVERSE FOUND (2026-10-14, `pitchmap.py`, `flipscan.py`, `delayscope.py`, `twin_apply.py`)
+- **Tools:** `twin_apply.py` = emulator twin of a patch pushed into the edit buffer (boot, copy buffer, call
+  F00E:0764 + F6A1:0382 directly). `pitchmap.py` = write / measure / exact-restore loop (440 Hz in, wet peaks out).
+  `delayscope.py` = click train in, each output click's position = each read head's delay; `seq()` changes steps
+  mid-stream (Windows gives every new stream a different latency, so compare only inside one stream; audio must run
+  on the main thread, MIDI writes in a helper thread).
+- **Commit 8 is NOT instruction + coefficient only:** writing 1:154 with commit 8 and stale latches broke the
+  oscillator path until an exact `dsplive.restore`. Always poke through `dsplive.poke/restore` (exact latches).
+- **Shifter structure (PITCH, wet only):** oscillator chip 1 1:14E-1:157; 1:155 `090000` / 1:156 `880000` are
+  memory ops: the phase lives in delay RAM between samples. Heads on chip 2: load phase (2:002/2:01A), x depth
+  (2:003/2:01B, plain 12-bit signed, no range bits), special regs 0x3D (2:004/01C), 0x3C (2:006/01E, kills output),
+  0x38 (2:00B/023, interpolation, loud garbage if changed), 4 reads 2:00C-00F / 2:024-027. reg3 of 2:003/2:01B =
+  destination register (0x1F there folds head 2 into a triangle: 221 Hz component, not a real x2).
+- **1:154 `01001f` bits 16-17 = scale of the stored phase increment: 01 = x1, 11 = x(-1), 00 = x0 (stops),
+  10 = x(-2).** Bits 6-15 add a constant rate (+v/2^18). So rate = -2 * osc * depth with `02001f`:
+  osc 0x100 -> 549 Hz, 0x400 -> 878, 0x7FF -> 1315 (rate -2). **osc 0x800 (-1.0) -> rate +2.0 = REVERSE at pitch**
+  (435 Hz from 440; ~1% slow, trim via the bits 6-15 add). 0xA00 -> 216 Hz (reverse octave down), 0xC00 -> freeze.
+  Delay scope confirms slope 2. Demo: `out/dsp_native_reverse_demo.wav`.
+- **Limit: window W = 2048 samples (64 ms).** Address offset = phase x depth x 1024, no scale bits found on
+  2:002-2:004/2:006/2:00B. Reversed grains = W/2 = 32 ms -> granular "micro reverse", not a reverse delay.
+- **2:017 `0114b5` A field = shared base read address of both heads** (A +320 -> both heads +10 ms, exact). A +3200
+  reads another block's memory: the B2 line is ~100 ms. A clone of 2:017 at 2:007 did nothing (base path unknown).
+- **Long-grain plan:** per-head bases + the CPU hops each head's base by +W at that head's wrap (head faded out), ~60
+  writes/s; grain change = hop the silent head to the new grain (native 16-32 ms crossfade); memory = point the base
+  into the tap line (0x69FF+). Needs: how the base enters each head, frame-exact wrap timing (commit chain = 2
+  frames), routing so the tap line holds the dry signal.
+- **Long grains: BLOCKED (2026-10-14, `dspx.py` phase readout, oscillator frozen):** 2:017 is the B2 line's WRITE
+  (zeroing it with commit 8 kills the wet; A +4 -> delay +4 samples exactly). The head reads (2:00C-00F,
+  2:024-027) ignore their A fields (A 0 -> 4: no delay change); they use only the modulated address register
+  (phase x depth, a Q23 fraction mapped to +-1024 samples, no scale bits on 2:002-2:006/2:00B). So per-head offsets
+  are capped at +-W/2 and the only 16-bit address in the shifter is the shared write: no per-head base hops, no
+  unbounded grains. DSP-native reverse = micro reverse (32 ms grains) only. The long reverse stays CPU-driven
+  (tap 2:072). Ideas that remain: a DSP 2-sample average after the tap (zero at fs/2 kills the 16 kHz - f mirror
+  ~11-20 dB under 3 kHz content), fades via the 1 ms stub + firmware set_coef.
+- **Tool notes:** delayscope clicks need main-thread audio; peak thresholds must be robust (percentile) because
+  write bursts make noise; with a moving head the mod-T plot aliases. `dspx.py` (tones, phase delay +-0.02 smp,
+  one stream) is the reliable delay meter. `dsplive.poke` on a step whose last commit was 1 sends commit 1 (A only):
+  pass commit=8 / 0 to really change the instruction.
+
+## Borrowed memory: the reverse gets 2.05 s (2026-10-14, `mem2s.py`, `memtest.py`)
+- **Memory op encoding (chip 2 only; chips 0/1 have no DRAM addresses):** address = instruction low 16 bits (commit 1
+  replaces just those). **Bit 17 = write** (classes 02/03/0A/0B/12...): tap input write **2:092 `0369ff`**, doubler
+  2:05D `020834` (2100), pitch line 2:039 `0314b4`, reverb 2:0B6-2:136, modulated writes 2:041/048/0C0/0CC/0D7.
+  Class 00/01 = reads: tap reads 2:069 (L), 2:06C (R), 2:072 (C), all set by E980:12E8. (My first guess "01 = write"
+  was wrong: 2:017 `0114b5` is a B2 step whose A moves both heads, not the write.)
+- **Trick:** silence every chip-2 write into 0x0100..0xFFBF except the tap's (17 steps), move the tap write to 0x0100
+  (and the L/R reads to 0x0101), engine BASE = 0x0100. Click test over the loop: echoes at 800.1 / 1150.1 / 1300.1 /
+  1600.1 / 1900.1 / 2000.1 ms for 800..2000 set, level flat (-6.2 dB vs dry), no foreign content (junk = leftover
+  feedback repeats, -27 dB after a pause). Kills reverb/mod/doubler in that patch; any patch push undoes it.
+- Reverse at 1/4 = 92 BPM (652 ms chunks, A 0x0120-0xA411) now fits: `mem2s.rev(io, 651.77)`.
+- **Dry kill attempt (2026-10-14, `drytest.py`, static C tap 300 ms, click per step, chip 2 060-0AF):** no single
+  step carries the dry. Wet-only killers: 2:070/071/072 (C tap read), 2:078 `14002e`, 2:07E `14002c` (each kills
+  the whole echo: in series). Dry -6.0 dB exactly when 2:075 `09ffc0`, 2:07B `09fff9` or 2:07D `090038` is zeroed
+  (coef 0 on all three: the instruction, not a level). 2:073/2:079 `000023` -> any MAC/load variant: +35 dB blow-up.
+  So the echo is added into a signal that already holds the dry; a wet-only mix needs the register/acc dataflow
+  of 2:073-2:07E decoded. Gotcha: `D.restore` of 2:072 puts the tap back to the patch time, so scans must skip it
+  or re-set the static tap after it.
+
+## Fades round 2 (2026-10-14): what we learned the hard way
+- **Commit 1 takes the instruction latch's top byte, not only A.** `committest.py` poisoned the latches with 0, which is
+  the C tap's own class (00), so it looked like "A only". Any other DSP write leaves its own top byte (firmware
+  setter, fade level 09, debug poke) and the engine's next commit 1 turns 2:072 into that class: the wet vanishes
+  (and stays gone across patch reloads until something rewrites the latch). Fix: write [8000:A] = 00 before each
+  commit 1 (engine v7/v8) or `rk7.tap_latch()` before resuming. Proven: wet -40 dB -> -6.7 dB just by that.
+- **Commit 8 ignores the A latch** (2:076 rewritten with A latch 5A5A: echo unchanged).
+- **Engine-ISR level writes hang the unit, latch fix or not** (v8 = v6 + latch reset hung at the first fade). The
+  hang scrambled half of battery RAM; `ramrestore.py` + the 06:00 dump brought most back. MISSED first time: the system block DS 9D00-9D05 + 9D78-9E78 (MIDI ch, PC maps; boot loads it via F6A1:0006 -> F00E:1E78, F00E:22A0 masks ch &0x0F) + live PC maps A0F4/A182 + A42C: boot looked odd, MIDI ch came back 3. Added to ramrestore.py. B800-CE1F / AB19-AFFE / D000-DFFF also scrambled but = unused SRAM noise / stack: left alone. Hard rule stands.
+- **Pedal-tick fades (v7, vector 30 stub, IE=0, timed busy waits) never hung** (100s of writes), but: (1) with IE=0
+  for the whole tick the engine lost ~1 update/ms (6% slow, 1 kHz wobble = the user's "Zelda pitch dancing") -> STI
+  first; (2) the engine keeps the bus busy almost continuously, so a fade write must wait inside an exclusive window
+  and the read head stalls a few updates per write: on a sweep the fades measured worse (+21 dB bursts) than no
+  fades (+9..14 dB). 1 ms level steps are also coarse (zipper). Open: a single exclusive write per step with the
+  engine skipping exactly one update, or crossfading between two taps instead of ramping a level.
+- Measuring traps: the loop must be in (check the dry level first); Windows latency changes per stream; drive 70
+  makes a steady tone's HF floor -27 dB, which hides clicks; a steady sine hides chunk-jump clicks (use a sweep).
+- **3rd hang (2026-10-14):** v7 engine running (address writes only, fades off), user pressed ESC to leave PEDAL mode
+  -> hung, debug port dead. Turning a knob with the engine on had not hung (stock knob path masks TMIC2); the mod menu
+  path apparently writes the DSP without masking TMIC2, so the engine commit lands inside its write. Rule: RL.stop
+  before anyone touches the front panel.
+
+## 100% WET HUNT round 2 (2026-10-14, `drytest.py` + `out/dsp_buslog_rev2.json` = old rev log + fresh apply twin)
+- The first chip-2 dry scan was wrong from 2:072 on: restoring 2:072 put the patch's 10 ms C time back, so "wet" (300 ms
+  window) read the floor. Rescan 2:073-08F with a valid wet: `out/dryscan_chip2b.txt`.
+- Chip 1 output mix 1:160-17A (`out/dryscan_chip1.txt`): no dry-only step. 1:169/1:170 (`54002b`/`540030`) cut dry 3/5.5
+  dB alone but both together blow up (+13..+19 dB, filter states). 1:179 (`180000`) zeroed = +29 dB and its restore
+  left the unit +25 dB hot until re-restored (dsplive.restore 1:179 + 1:17A): avoid that pair.
+- Chip 2 mixer, two halves: A = 073-078 (`000023 01ffdc 09ffc0 090038 08001d 14002e`), B = 079-07E (`000023 01ffc0
+  09fff9 090038 090038 14002c`). 2:076/07C = C level (coef 0x400). 08 family = store acc to register (077 -> reg 1D;
+  swapping 077 to reg 38 overwrote the tap register). 2:101 `180023` = writes the block input into reg 23.
+- **Half B dry removed: 2:079 `000023` -> `000038`** (load the C tap register instead of the input): dry -6 dB, wet
+  +3.5 dB (wet-dry -6 -> +3.4). Half A's dry does NOT come from any reg-23 reader in chip 2 (073/061/084/086/09A/09E/
+  0A3/0A4/0C1 swapped to 38: no change) nor 074/075's registers. Source still unknown.
+- 2:07D `090038` (third MAC, coef 0) -> `090023` + coef: wet +5.7..+9.2 dB more, dry unchanged (coef 0x7FF: wet-dry
+  +9.3). Mechanism not understood (reg 23 at that step is not plain dry). Ear test before trusting it.
+- Round 3 (`out/drywet_scanB_058.txt`, `drywet_dig1-3`, `drywet_combo3`): with 2:079 fixed, zero-scan 058-0AF: only
+  2:07C NOP cuts more dry (-11.9 dB total, wet -0.1). 2:075 belongs to the SAME dry half as 079 (B + 075 nop: no change).
+  07A/07B/07D NOP kill everything (chain links); 07B operand swaps do nothing; 07A r00->r38 kills everything.
+  Best so far: B + 07D `090023`/7FF = wet-dry +9.1 dB (dry -5.7, wet +9.4); B + 07C nop = +5.8 dB.
+  DANGER: B + 07C nop + 07D tweak = +26 dB and the restore left the unit +17 dB hot until 07D/07C/079 were
+  re-restored in that order. Zero/swap tests interact nonlinearly: the ISA semantics (00/01/08/09/14 families,
+  pipelining) need a real decode before the last dry half can be found.
+
+## 100% WET FOUND (2026-10-14, `bench.py`, `wet100.py`; logs out/bench1-9.txt)
+- **Coefficients are 12-bit two's complement: 0x7FF = +1.0, 0x800 = -1.0, 0xC00 = -0.5; bits 12-15 ignored.**
+  CORRECTION of the old note "0x7FF wraps to ~0 on 2:076/07C" (that was the stale-latch bug): 076/07C coef 0x7FF =
+  +1.0 = +6 dB wet over the firmware's max 0x400 (+0.5, "level 100"). Measured +5.9 dB.
+- Each step has its own coefficient SLOT; commit 8 writes instruction + slot. Steps the firmware only commits with 00
+  (instruction) keep a slot set at boot: poking them with commit 8 and the default coef 0 silently zeroes the slot
+  (that was most of round 2-3's confusing "NOP"/swap results). `dsplive.py <chip> <step>` lists the commits.
+- **2:07A `01ffc0` slot = chain-B dry gain (boot +1.0).** Set to 0x800 (-1.0): chain B's dry cancels chain A's dry.
+  Static 300 ms tap: dry -28..-30 dB (meter floor), wet -0.1 dB. On the reverse (engine frozen for the A/B): dry
+  -22 -> -53 dBFS (-31 dB), echo +3 dB with C level 0x7FF. Trim 0x800-0x830: flat (floor), so the gains match.
+- On 07A: instruction bits 6-23 (incl. 16-17 and 22-23) change nothing; the low 6 bits do (operand/register).
+  On 079 (`000023`, r3 field 23 via commit 4) only the low 6 bits matter (23 = block input, 38 = C tap).
+- Tool: `py -3.10 wet100.py on [clevel] | off` (engine paused around the writes, C-tap latch, resume). Any OS DSP
+  rewrite undoes it. Only run `on`/`off` with the reverse engine loaded (resume starts timer 0).
+- **Crackle = digital clipping on the output side** (ear test 2026-10-14, guitar, wet100 on): C level 0x7FF crackles,
+  0x400 better, 0x300 "almost perfect", 0x200 only barely on hard attacks. Engine counters clean meanwhile (16k
+  writes/s, 0 busy/fw/timeout). Lowering C level helps, so the clip is after 2:076/07C. Suspect: the dry cancel may be
+  ACROSS the L/R outputs (chain A -> one DAC, chain B -> the other, summed by the mono jack), so each DAC still carries
+  full dry + wet; then the headroom fix is removing the dry inside each chain. Untested; lofilt.py: negative
+  treble/presence = louder/fizzier/harsher, no help (treble 0 = the line-out's max cut).
+- Ear tuning (guitar, 2026-10-14): crackle at high volume = the 16 kHz - f mirror (high strings crackle more; input
+  cut 6 kHz -> 4.5 kHz better; 3 kHz darker; user KEEPS 4.5 kHz). Per-chain echo: chain A (2:076) 0x300, chain B (2:07C) 0 = cleaner
+  than both 0x200. Muting output A or B (outmute.py) never brought the dry back: the cancel is inside the DSP and
+  both outputs carry the reverse; the user's jack hears a mix of both. One-shot: `py -3.10 revfull.py`.
+  Next idea: 2-sample average after the tap (notch at 16 kHz) in chain B's spare steps, to get brightness back.

@@ -1,0 +1,6 @@
+{
+  "name": "PITCH LOFI",
+  "found": "2026-10-14, by ear (user: 'really beautiful pitch lofi, fast realistic, organ like'). Stock blocks only: no CPU engine, no DSP pokes, so it can be stored with WRITE on the unit.",
+  "recipe_py": "P.R(P.on('dirt','eq','amp','mod', od=True, b2='pitch'), P.OD(0,40,60), P.EQ(hi=(2500,-12), hm=(1000,+8,1.5), lm=(200,-6,1.0), lo=(250,-12)), P.PITCH(-5, 200), P.LINE(0,0,50,55,80))",
+  "notes": "PITCH -5 semitones, balance 200 = all wet. Tone = the REVERSE DELAY base: OD 40, EQ band-pass 250 Hz-2.5 kHz +8 dB at 1 kHz, line-out presence/treble 0."
+}

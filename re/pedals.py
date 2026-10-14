@@ -280,7 +280,8 @@ def rq1(inp, out):
     t = time.time()
     while time.time() - t < 1.5:
         for m in inp.iter_pending():
-            if m.type == 'sysex' and list(m.data[:5]) == [0x41, 0, 0x2A, 0x12, 0]:
+            d = list(m.data[:5])                  # any device ID: a corrupted channel byte once made it 3
+            if m.type == 'sysex' and d[0] == 0x41 and d[2:5] == [0x2A, 0x12, 0]:
                 return list(m.data[7:7 + 118])
         time.sleep(0.01)
     return None

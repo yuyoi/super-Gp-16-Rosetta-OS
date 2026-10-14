@@ -22,7 +22,7 @@ def _load():
     if _hist is None:
         _hist = {}
         cur = {o: 0 for o in LATCH}
-        log = json.load(open(os.path.join(HERE, 'out', 'dsp_buslog.json')))
+        log = json.load(open(os.environ.get('DSP_BUSLOG') or os.path.join(HERE, 'out', 'dsp_buslog.json')))
         st = os.path.join(HERE, 'out', 'dsp_state.json')               # pedal segment applied by dspstate.py
         if os.path.exists(st):
             log += json.load(open(st))['log']
