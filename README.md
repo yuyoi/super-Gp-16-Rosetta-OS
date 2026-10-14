@@ -1,4 +1,3 @@
-<p align="center"><img src="https://raw.githubusercontent.com/yuyoi/Rompler-RosettaRom/main/assets/logo.png" width="360" alt="Rosetta"></p>
 <p align="center"><img src="assets/GP16_80s_ad.jpg" width="640" alt="The GP-16 in an 80s-style ad"></p>
 
 # Super GP-16 Rosetta OS (JSW ROSETTA OS v2.8 WIP)
