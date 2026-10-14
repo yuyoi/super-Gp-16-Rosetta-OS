@@ -21,6 +21,8 @@ ST_PED   equ 0xcf30
 ST_RV    equ 0xce40                  ; 4 B: knob positions BPM-40, note, mix 0-10, level 0-10
 ST_REVON equ 0xce45                  ; 1 = engine running
 ST_REVMEM equ 0xce46                 ; 1 = borrowed memory / dry cancel written: unborrow before anything else plays
+ST_REVHOLD equ 0xce47                ; OS view (DS FA00): 1 = OS busy, engine must not touch the DSP this tick
+HOLD_SS  equ 0x0247                  ; same byte in the engine's SS = 06C0 (FA00:CE47 == 06C0:0247): menu-hold flag
 BOOTI    equ 0x14c4                  ; DS: chip 2 boot instructions, 3 B per step (set_coef E83B:06CC reads them)
 REVSEG   equ 0xf301
 WBASE    equ 0x0100                  ; tap write address (borrowed memory)
@@ -51,6 +53,8 @@ isr:    test [si], al                ; busy: early
         jae .wrap
 .in:    test byte [es:0x9e], 0x40    ; TMIC2 masked: the firmware is writing the DSP
         jnz .out
+        cmp byte [ss:HOLD_SS], 0     ; OS menu busy (every dispatch brackets itself with this): skip the commit,
+        jnz .out                     ; A still advanced so timing holds; no DSP write = no collision = no hang
         mov [si + 1], bh             ; A latch high, low
         mov [si], bl
         mov byte [si + 0x0a], 0      ; commit 1 also takes the instruction latch's top byte: the C tap's (00)
@@ -71,8 +75,16 @@ stop_core:                           ; engine off: timer 0 masked + stopped (all
         push es
         mov ax, 0x40f0
         mov es, ax
-        mov byte [es:0x9c], 0x47     ; TMIC0 masked
+        mov byte [es:0x9c], 0x47     ; TMIC0 masked (no more engine interrupts)
         mov byte [es:0x90], 0x50     ; TMC0 as the firmware leaves it
+        mov ax, 0x8000               ; wait for any in-flight engine commit to finish before the caller writes the DSP
+        mov es, ax
+        push cx
+        mov cx, 4000
+.w:     test byte [es:0], 1
+        jz .idle
+        loop .w
+.idle:  pop cx
         pop es
         pop ax
         mov byte [ST_REVON], 0

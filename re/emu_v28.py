@@ -41,6 +41,10 @@ def rn(uc, a, s, u): st['revnow'] += 1
 def hk(uc, a, s, u): st['hook'] += 1
 mu.hook_add(UC_HOOK_CODE, rn, None, REVP + 0, REVP + 0)
 mu.hook_add(UC_HOOK_CODE, hk, None, REVP + 6, REVP + 6)
+st['holdv'] = set()
+def hold_w(uc, acc, addr, size, val, ud): st['holdv'].add(val & 0xFF)
+mu.hook_add(UC_HOOK_MEM_WRITE, hold_w, None, 0x6E47, 0x6E47)
+mu.hook_add(UC_HOOK_MEM_WRITE, hold_w, None, 0x106E47, 0x106E47)
 
 def final(c, s):
     """last commit-0 instruction and last commit-8 coefficient of a step, from the whole log"""
@@ -110,6 +114,7 @@ SCRIPT = [
     C(lambda: eq('span 92 BPM 1/4 (41713) and amax = 0120 + span', (bank6('cw'), bank6('dw')), (41713, 0x120 + 41713))),
     C(lambda: check(f'timer 0 on (TMC0 80, TMIC0 16): {st["t0"][-3:]}', t0_on())),
     C(lambda: eq('ST_REVON', rd(0xCE45)[0], 1)),
+    C(lambda: eq('menu-hold byte toggles (engine skips its DSP write during OS dispatch)', sorted(st['holdv']), [0, 1])),
     # knob page
     ('key', 0x0F), lcdh('REV 6-knob screen', 'BP NT MX F  T  L', ' 92  410 4  6  8'),
     C(lambda: S.update(n=st['revnow'], h=st['hook'])),

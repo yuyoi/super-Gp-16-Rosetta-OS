@@ -365,3 +365,12 @@ make loud noise, but they can't damage anything (the DSP only computes).
   commit 1) and C levels (076/07C, commit 8) only. So the borrowed-memory NOPs, the moved tap write and the 07A dry
   cancel would outlive the pedal: `unborrow` writes those 19 steps back from the boot table (commit 0; resets 07A's
   coefficient slot) before every sound change. "A patch push undoes borrowed memory" in mem2s.py was only the tap times.
+
+## v2.8 hang on REV select/exit -> fixed (2026-10-14, hw)
+- Symptom: with REVERSE DLY picked, navigating/exiting hung the unit (the engine ran continuously; on any menu
+  action the OS also wrote the DSP and the engine's commit-1 landed inside it -> stuck busy). Same mechanism as the
+  earlier ESC hang. The emulator can't reproduce it (DSP modelled as never-busy).
+- Fix: a menu-hold byte FA00:CE47 (= 06C0:0247 in the engine's SS). mloop clears it before SERVICE (idle wait: the
+  engine may write) and sets it after (all dispatch: the engine skips its commit, A still advances so timing holds).
+  stop_core now also waits for the DSP to go idle before unborrow writes it. No DSP write from the engine can overlap
+  an OS DSP write. emu_v28 checks the byte toggles 0/1.

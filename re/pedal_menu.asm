@@ -120,6 +120,7 @@ D_BPM    equ 7               ; knob disp: BPM = 40 + k, 3 digits
 D_NOTE   equ 8               ; knob disp: note value name (s_note)
 ST_RV    equ 0xce40          ; 4 B: BPM-40, note, mix, level (rev_blob.asm reads them)
 ST_REVP  equ 0xce44          ; 1 = reverse (re)start due (written by mloop once the sound change is done)
+ST_REVHOLD equ 0xce47        ; 1 = OS busy: the reverse engine skips its DSP write (set around all dispatch)
 
 %macro farcall 2
         db 0x9a
@@ -150,6 +151,7 @@ menu_sys:
         call to_split
 
 mloop:
+        mov byte [ST_REVHOLD], 0     ; idle wait: the engine may write the DSP (nothing else does during SERVICE)
         xor ax, ax
         cmp byte [ST_STATE], 3
         je .svc
@@ -157,6 +159,7 @@ mloop:
 .svc:   push ax
         farcall F6A1_SEG, SERVICE
         add sp, 2
+        mov byte [ST_REVHOLD], 1      ; dispatch (keys, apply, redraw, exit): the engine must not touch the DSP
         cmp byte [ST_CABP], 0        ; cab coefficients due, and the sound change is done
         je .ncab
         test byte [SNDREQ], 0x20
