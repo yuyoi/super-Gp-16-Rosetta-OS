@@ -356,3 +356,12 @@ make loud noise, but they can't damage anything (the DSP only computes).
   than both 0x200. Muting output A or B (outmute.py) never brought the dry back: the cancel is inside the DSP and
   both outputs carry the reverse; the user's jack hears a mix of both. One-shot: `py -3.10 revfull.py`.
   Next idea: 2-sample average after the tap (notch at 16 kHz) in chain B's spare steps, to get brightness back.
+
+## REVERSE DLY in ROM (v2.8 WIP, 2026-10-14)
+- The tuned live setup became an OS pedal: `rev_blob.asm` (engine + setup), knob target REVT in `pedal_menu.asm`,
+  recipe `pedals.py` 'revdelay', knobs BP NT MX F T L (`gen_pedal_data.py`), test `emu_v28.py`.
+- Found while building: the firmware's sound change (LOADBUF) never rewrites chip-2 INSTRUCTIONS (they load once at
+  boot; all 512 live chip-2 instructions = the boot table DS:14C4, 3 B per step). It rewrites tap A fields (069/06C/072,
+  commit 1) and C levels (076/07C, commit 8) only. So the borrowed-memory NOPs, the moved tap write and the 07A dry
+  cancel would outlive the pedal: `unborrow` writes those 19 steps back from the boot table (commit 0; resets 07A's
+  coefficient slot) before every sound change. "A patch push undoes borrowed memory" in mem2s.py was only the tap times.

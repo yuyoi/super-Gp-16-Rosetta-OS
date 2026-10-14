@@ -1,12 +1,13 @@
 <p align="center"><img src="https://raw.githubusercontent.com/yuyoi/Rompler-RosettaRom/main/assets/logo.png" width="360" alt="Rosetta"></p>
 <p align="center"><img src="assets/GP16_80s_ad.jpg" width="640" alt="The GP-16 in an 80s-style ad"></p>
 
-# Super GP-16 Rosetta OS (JSW ROSETTA OS v2.7)
+# Super GP-16 Rosetta OS (JSW ROSETTA OS v2.8 WIP)
 
 > **Runs on real hardware.** v2.7 runs on a real Roland GP-16 from a flash chip in the IC11 socket. Since v2.4 the
 > OS also reaches into the DSPs themselves: a cab sim built from custom EQ coefficients, and a hidden x2 drive stage
 > that takes the dirt knobs past 10. v2.7 removes stock code nobody needs (the old Edit menu, the factory/test menus)
-> and frees 24 KB of ROM for what comes next. See [Status](#status).
+> and frees 24 KB of ROM for what comes next. **v2.8 (WIP, emulator-tested, not burned yet)** adds REVERSE DLY: a real
+> reverse delay with the DSP's memory borrowed to 2 s and the dry cancelled inside the DSP. See [Status](#status).
 
 A new OS for the Roland GP-16 guitar processor: the rack becomes **one pedal with real knobs**, a **pedal + amp rig**,
 or a **12-slot pedalboard**, played from the front panel with no patch list in the way. It patches your own IC11 dump
@@ -43,7 +44,7 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 - **LINE OUT FILTER knobs** get a dB law with a true OFF at 0 (stock never fully cuts a band).
 - **SysEx debug port** (MIDI ch 1): DSP coefficient writes and memory read/write from a PC (`re/gp16poke.py`).
 
-### Pedals (59) and amps (12)
+### Pedals (60) and amps (12)
 
 | Slot | Pedals |
 |---|---|
@@ -59,6 +60,13 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 | B4 DELAY | DIGITAL DLY, SPACE ECHO, MEMORY MAN |
 | B5 REVERB | SPRING, HALL/PLATE, SHIMMER, CATHEDRAL, CAVE, CHURCH, STAGE, AMBIENT, SHOEGAZE WASH |
 | B6 AMP/CAB | CLEAN, TWIN, JCM800, AC30, DOOM, DI / FLAT, RADIO, JC-120, 5150, SUPER LEAD, RANDALL, JCM800 RIP |
+
+**REVERSE DLY** (v2.8 WIP, PEDAL and RIG mode, not on the board): a reverse delay locked to tempo. Knobs: **BP** BPM
+40-240, **NT** note value (16, 8T, 8, 4T, 8., 4, 4., 2; auto-halved past the 1 s memory), **MX** dry 0-10 (10 = 100%
+wet), **F** feedback, **T** tone (input cut ~2-8 kHz), **L** level. Under the hood: chip 2's other memory writes are
+silenced so the tap gets 2 s of line, a CPU engine on timer 0 moves the tap backwards every 2 DSP frames, and the
+dry is cancelled with a -1.0 coefficient (`re/rev_blob.asm`, research in `re/DSP_CRACK.md`). Any sound change stops
+the engine and restores the stock DSP program first.
 
 Two voicings are custom: FUNERAL (doom fuzz) and IRON MAN (an early-Iommi voicing). RADIO is a transistor-radio
 amp.
@@ -136,11 +144,11 @@ anything other than the "Super GP Ver 1.0" ROM (MD5 `ac5f56bcb3d8c30ddf3f1ffe88b
    cd re
    py -3.11 build_all.py ../ic11.bin
    ```
-   This writes `re/build/gp16_mod_v2_7.bin` (128 KB) and `re/build/gp16_mod_v2_7_sst512k.bin` (the same image 4x).
+   This writes `re/build/gp16_mod_v2_8.bin` (128 KB) and `re/build/gp16_mod_v2_8_sst512k.bin` (the same image 4x).
 3. **Burn** the `_sst512k` file to a 512 KB flash (SST39SF040, or AMIC A29040 for chips that ID as `0x3786`), read it
    back and compare:
    ```
-   minipro -p SST39SF040 -w gp16_mod_v2_7_sst512k.bin
+   minipro -p SST39SF040 -w gp16_mod_v2_8_sst512k.bin
    ```
 4. **Fit it in IC11** (notch the same way). The GP-16 board already ties pin 31 high, so the flash drops straight in:
    no wires, no cuts. Put the original chip back any time.
@@ -157,10 +165,11 @@ anything other than the "Super GP Ver 1.0" ROM (MD5 `ac5f56bcb3d8c30ddf3f1ffe88b
 `pip install unicorn capstone`. Each script runs the whole firmware, boots to the main loop and plays a scripted
 front-panel session:
 ```
-py -3.11 -I emu_v10.py build/gp16_mod_v2_7.bin    # macros, 6-knob screen, switches, Dim C, exp pedal, rig, cab, x2 stage, board memories
-py -3.11 -I emu_v09.py build/gp16_mod_v2_7.bin    # board mode: grabs, order, A/B/Y
-py -3.11 -I emu_v11.py build/gp16_mod_v2_7.bin    # v2.7: tripwire on every removed byte, real System menu walk, EDIT key
-py -3.11 -I emu_boot_banner.py build/gp16_mod_v2_7.bin   # boot screen text
+py -3.11 -I emu_v10.py build/gp16_mod_v2_8.bin    # macros, 6-knob screen, switches, Dim C, exp pedal, rig, cab, x2 stage, board memories
+py -3.11 -I emu_v09.py build/gp16_mod_v2_8.bin    # board mode: grabs, order, A/B/Y
+py -3.11 -I emu_v11.py build/gp16_mod_v2_8.bin    # v2.7: tripwire on every removed byte, real System menu walk, EDIT key
+py -3.11 -I emu_v28.py build/gp16_mod_v2_8.bin    # v2.8: REVERSE DLY screen, DSP setup, engine start/stop, restores
+py -3.11 -I emu_boot_banner.py build/gp16_mod_v2_8.bin   # boot screen text
 ```
 The test scripts print `PASS`. `emu_v10.py` also checks that nothing but the OS writes to its battery-RAM areas;
 `emu_v11.py` fails if the firmware ever runs a byte that v2.7 removed.
@@ -215,6 +224,7 @@ listing is derived from Roland's code: keep it private.
 | 2.5 | dirt past 10: 11 / 12 via the DSP's hidden x2 stage; the dial scaled for the smooth (no-detent) encoder | works |
 | 2.6 | far blob at the end of ROM; finer steps 10+ / 11 / 11+ / 12 | works |
 | 2.7 | stock Edit menu and power-on factory/test/demo menus removed (call-graph checked), 24 KB freed; EDIT = split | works (boot, SysEx, menus) |
+| 2.8 | WIP: REVERSE DLY pedal (2 s borrowed memory, 100% wet, BPM + note sync); engine stopped on every sound change | emulator PASS (v28, v10, v11), not burned yet |
 
 On one unit the LCD contrast used to come up low on about 1 in 5 boots. The OS re-sends the contrast setting at the
 end of boot, which fixed it there.
@@ -226,7 +236,10 @@ end of boot, which fixed it there.
 - [ ] USER 1-8 pedal slots in battery RAM (load new pedals over MIDI, no burn). Plan: `PC_TONE_APP.md`.
 - [x] GP Tone Zone: refine each sound on the unit itself through an audio loop.
 - [ ] GP Tone Zone: run it on real TONE3000 captures; set the x2 stage over SysEx; preset formats (Helix, BOSS).
-- [ ] Use the 24 KB freed in v2.7: delay toys, a SYNTH pedal (hot fuzz + envelope filter + sub octave).
+- [ ] Use the 24 KB freed in v2.7: delay toys (REVERSE DLY started in v2.8), a SYNTH pedal (hot fuzz + envelope
+  filter + sub octave).
+- [ ] REVERSE DLY: burn + ear test, click-free chunk edges, a low-pass after the delay for the 16 kHz - f mirror,
+  octave up/down speeds, BOARD slot.
 - [ ] Hold-to-repeat on the knob buttons.
 - [ ] Crack the rest of the TC23SC260 instruction set (EQ, cab, delay taps and the drive stages are done): new
   algorithms, an OD -> DIST cascade.

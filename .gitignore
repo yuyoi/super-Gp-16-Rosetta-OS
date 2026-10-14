@@ -6,6 +6,7 @@ re/out/
 !re/dragon_frames.bin
 *.lst
 re/pedal_data.inc
+re/rev_data.inc
 # Roland manuals (OCR) and a factory patch read from the unit
 gp16_owners_manual_ocr.txt
 gp16_service_notes_ocr.txt

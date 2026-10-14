@@ -28,7 +28,8 @@ PRESETS_KEEP_END = PRESETS_KEEP * 114  # 0x0720 for 16
 DRAGON_ROM = 0x0080 if V1 else 0x0720  # paragraph aligned: segment E000 + ROM/16
 MENU_ROM = 0x0200 if V1 else 0x0A00
 PRESETS_END = 128 * 114              # 0x3900
-TABLE_ROM = 0x1FC00                # inside the 1 KB zero run 1FBBE-1FFEF
+REV_ROM, REV_END = 0x13010, 0x147FA   # v2.8 rev_blob: dead range 1300E-147FA (dead_ranges.txt), paragraph aligned
+TABLE_ROM = 0x1FC00               # inside the 1 KB zero run 1FBBE-1FFEF
 TABLE_DS = TABLE_ROM - 0x1A000      # DS=FA00 -> offset 0x5C00
 
 
@@ -139,6 +140,11 @@ def main():
         patches.append((0x16B16, bytes.fromhex('9a2005a1f6'),
                         bytes([0x9a, 0x00, 0x00]) + (0xE000 + MENU_ROM // 16).to_bytes(2, 'little')))   # lcall E020:0000
         patches.append((0x16A47, bytes.fromhex('9a8601fcf2'), bytes.fromhex('eb0c909090')))             # jmp short 0045
+    # v2.8: REVERSE DELAY. The firmware's sound change (LOADBUF F6A1:0382: push bp; mov bp,sp; lcall E980:0098)
+    # jumps to rev_blob's hook first (F301:0006), which stops the reverse engine, runs those 8 bytes, jumps back to 038A.
+    if VERSION >= '2.8':
+        patches.append((0x16D92, bytes.fromhex('558bec9a980080e9'),
+                        bytes([0xEA, 0x06, 0x00]) + (0xE000 + REV_ROM // 16).to_bytes(2, 'little') + bytes([0x90] * 3)))
     for off, old, new in patches:
         assert len(old) == len(new), hex(off)
         if rom[off:off + len(old)] != old:
@@ -184,6 +190,13 @@ def main():
                 sys.exit(f'far blob ({len(blob)} B) does not fit at {FAR_ROM:05X}-{FAR_END - 1:05X}')
             rom[FAR_ROM:FAR_ROM + len(blob)] = blob
             print(f'far blob {len(blob)} B @{FAR_ROM:05X} (FFD9:0000), {FAR_END - FAR_ROM - len(blob)} B left')
+        if VERSION >= '2.8':                        # rev_blob into the biggest dead range wiped by the v2.7 kill
+            blob = open(os.path.join(here, 'rev_blob.bin'), 'rb').read()
+            if REV_ROM + len(blob) > REV_END or set(rom[REV_ROM:REV_ROM + len(blob)]) != {0xFF}:
+                sys.exit(f'rev blob ({len(blob)} B) does not fit at {REV_ROM:05X}-{REV_END - 1:05X}')
+            rom[REV_ROM:REV_ROM + len(blob)] = blob
+            print(f'rev blob {len(blob)} B @{REV_ROM:05X} ({0xE000 + REV_ROM // 16:04X}:0000), '
+                  f'{REV_END - REV_ROM - len(blob)} B left')
     name = f'gp16_mod_v{VERSION.replace(".", "_")}'
     p128 = os.path.join(out, name + '.bin'); p512 = os.path.join(out, name + '_sst512k.bin')
     open(p128, 'wb').write(rom)

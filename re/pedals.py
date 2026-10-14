@@ -222,6 +222,9 @@ PEDALS = {
  # Dave Mustaine, Holy Wars (Rust in Peace '90): boosted JCM800 -- tight, lows trimmed, ~1.2 kHz bark, crisp attack
  'holywar': R(on('dirt', 'eq', 'ns'), DIST(+20, 75, 50),
               EQ(hi=(4500, +4), hm=(1200, +4, 1.2), lm=(250, -3, 1.0), lo=(80, -4)), NS(45, 25)),
+ # --- v2.8 WIP: REVERSE DELAY (rev_blob.asm). The tap delay is the canvas: the OS borrows chip 2's memory (2 s),
+ # runs the reverse engine on the C tap (timer 0) and cancels the dry (2:07A = -1.0); C time/level here are overridden.
+ 'revdelay': R(on('dly'), TAP(10, 100, fb=36, cutf=4500)),
 }
 
 # Level trims (EQ OUT, dB; tone unchanged). User 2026-10-13: "every fuzz is loud now except the funeral" = the fuzzes

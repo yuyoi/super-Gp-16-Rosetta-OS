@@ -112,6 +112,14 @@ FAR_DIALSET equ 0
 FAR_DIALVAL equ 3
 FAR_HOT  equ 6
 FAR_CAB  equ 9
+REVSEG   equ 0xf301          ; v2.8 rev_blob.bin at ROM 0x13010 (dead stock range wiped by v2.7): REVERSE DELAY
+REV_NOW  equ 0
+REV_STOP equ 3
+REVT     equ 0xfc            ; knob table target = reverse setting (2 B: REVT, which) -> ST_RV[which], mloop sets up
+D_BPM    equ 7               ; knob disp: BPM = 40 + k, 3 digits
+D_NOTE   equ 8               ; knob disp: note value name (s_note)
+ST_RV    equ 0xce40          ; 4 B: BPM-40, note, mix, level (rev_blob.asm reads them)
+ST_REVP  equ 0xce44          ; 1 = reverse (re)start due (written by mloop once the sound change is done)
 
 %macro farcall 2
         db 0x9a
@@ -161,7 +169,13 @@ mloop:
         jnz .nhot
         mov byte [ST_HOTP], 0
         call hot_now
-.nhot:  cmp byte [ST_SAVE], 0
+.nhot:  cmp byte [ST_REVP], 0        ; REVERSE DELAY due: memory, dry cancel, engine (rev_blob checks the pedal)
+        je .nrev
+        test byte [SNDREQ], 0x20
+        jnz .nrev
+        mov byte [ST_REVP], 0
+        farcall REVSEG, REV_NOW
+.nrev:  cmp byte [ST_SAVE], 0
         je .nsv
         jmp .save
 .nsv:   mov ax, K_ESC
@@ -300,7 +314,8 @@ mloop:
         call redraw
         jmp mloop
 
-.exit:  call cur_off
+.exit:  farcall REVSEG, REV_STOP     ; leaving the OS: no engine on the patch screen
+        call cur_off
         mov ax, K_CLR                ; drop queued presses so nothing reaches the patch keys
         call keyt
         and byte [MENUFLG], 0xfe
@@ -424,6 +439,7 @@ knobs_reset:                         ; every store <- its table defaults
         ret
 
 to_split:
+        farcall REVSEG, REV_STOP     ; the split screen never runs the engine
         mov ax, K_CLR
         call keyt
         mov byte [ST_STATE], 0
@@ -682,7 +698,17 @@ knob_core:                           ; si = entry, di = store, al = idx, dl = li
         mov byte [ST_HOTP], 1
         mov ax, 2
         jmp .adv
-.nh:    mov al, [cs:bx]
+.nh:    cmp byte [cs:bx], REVT       ; reverse (2 bytes: REVT, which): position -> ST_RV[which], mloop sets up
+        jne .nr
+        mov al, [cs:bx+1]
+        mov ah, 0
+        mov si, ax
+        mov al, [bp-2]
+        mov [si+ST_RV], al
+        mov byte [ST_REVP], 1
+        mov ax, 2
+        jmp .adv
+.nr:    mov al, [cs:bx]
         and al, 0x7f
         sub al, 0x0c
         mov ah, 3
@@ -1861,7 +1887,28 @@ draw_six:                            ; 5-6 knobs: 2-char names over 2-digit valu
         call cursor
         mov ax, di
         call knob_rec                ; cab knob: 2-char name instead of the number
-        cmp byte [cs:bx+5], D_CAB
+        cmp byte [cs:bx+5], D_BPM    ; reverse BPM: 3 digits (the column after knob 0 is free)
+        jne .nbp
+        mov bx, [ST_SPTR]
+        mov al, [bx+di]
+        mov ah, 0
+        add ax, 40
+        call put3
+        jmp .nx
+.nbp:   cmp byte [cs:bx+5], D_NOTE   ; reverse note value: 2-char name
+        jne .ncb
+        mov bx, [ST_SPTR]
+        mov al, [bx+di]
+        mov ah, 0
+        add ax, ax
+        mov bx, ax
+        mov al, ' '                  ; one column right (the free one): the BPM's 3rd digit sits before it
+        call putc
+        mov al, [cs:bx+s_note]
+        call putc
+        mov al, [cs:bx+s_note+1]
+        jmp .d2
+.ncb:   cmp byte [cs:bx+5], D_CAB
         jne .num
         mov bx, [ST_SPTR]
         mov al, [bx+di]
@@ -1888,7 +1935,7 @@ draw_six:                            ; 5-6 knobs: 2-char names over 2-digit valu
         pop ax
         add al, '0'
 .d2:    call putc
-        inc di
+.nx:    inc di
         jmp .l
 .cur:   mov bl, [ST_ACT]
         cmp bl, [ST_N]
@@ -1905,6 +1952,24 @@ draw_six:                            ; 5-6 knobs: 2-char names over 2-digit valu
         jmp lcd_ucur
 six_col: db 0, 3, 6, 8, 11, 14       ; LO HM LM H  G  L
 six_col5: db 0, 3, 6, 9, 12          ; VL GT CP DR SB
+
+put3:                                ; ax = 0-255 -> 3 chars, leading blank
+        mov cl, 100
+        div cl                       ; al = hundreds, ah = rest
+        mov ch, ah
+        add al, '0'
+        cmp al, '0'
+        jne .h
+        mov al, ' '
+.h:     call putc
+        mov al, ch
+        mov ah, 0
+        mov cl, 10
+        div cl
+        add ax, '00'
+        call putc
+        mov al, ah
+        jmp putc
 
 draw_modes:                          ; mode buttons: row 1 name, row 2 " 1   2  [3]  4  "
         xor ax, ax
