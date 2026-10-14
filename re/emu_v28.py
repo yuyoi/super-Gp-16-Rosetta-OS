@@ -117,7 +117,6 @@ SCRIPT = [
     C(lambda: check(f'timer 0 on (TMC0 80, TMIC0 16): {st["t0"][-3:]}', t0_on())),
     C(lambda: eq('ST_REVON', rd(0xCE45)[0], 1)),
     C(lambda: eq('engine-setup breadcrumb reached 0x25 (engine running)', rd(0xCE48)[0], 0x25)),
-    C(lambda: check('OS masks (0x56) and unmasks (0x16) the engine timer around dispatch', 0x56 in st['tmic0'] and 0x16 in st['tmic0'])),
     # knob page
     ('key', 0x0F), lcdh('REV 6-knob screen', 'BP NT MX F  T  L', ' 92  410 4  6  8'),
     C(lambda: S.update(n=st['revnow'], h=st['hook'])),
@@ -145,6 +144,7 @@ SCRIPT = [
     C(lambda: eq('F 5 -> fb 45', last(0x4E), 45)),
     C(lambda: check(f'F = live setter, engine untouched (rev_now +{st["revnow"] - S["n"]})',
                     len(st['live']) > S['live'] and st['revnow'] == S['n'] and t0_on())),
+    C(lambda: check('engine timer masked (0x56) + unmasked (0x16) around the live setter', 0x56 in st['tmic0'] and 0x16 in st['tmic0'])),
     dmark('button 6 = L, VALUE up -> 9'), ('key', 6), ('key', 0x0A), ('wait',), ('wait',),
     C(lambda: eq('L 9: 2:076 = 0x399', final(2, 0x76)[1], 0x399)),
     # leaving

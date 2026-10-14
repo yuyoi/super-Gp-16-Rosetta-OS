@@ -151,16 +151,14 @@ menu_sys:
         call validate
         call to_split
 
-mloop:
-        farcall REVSEG, REV_GO       ; idle wait: let the engine run (nothing else touches the DSP during SERVICE)
-        xor ax, ax
-        cmp byte [ST_STATE], 3
-        je .svc
-        inc ax                       ; BANK/GROUP = dial -/+ except in BOARD (they pick pedals there)
+mloop:                               ; the engine runs free through the menu (redraws/keys/dial touch the LCD, not the
+        xor ax, ax                   ; DSP). The truce is called only at the few spots that DO write the DSP: rev_now,
+        cmp byte [ST_STATE], 3       ; hook_load and REV_STOP stop the engine; live_set masks it around the firmware
+        je .svc                      ; setter. Masking it across the whole loop instead jumped the tap every tick =
+        inc ax                       ; "extra cascading samples" of noise.
 .svc:   push ax
         farcall F6A1_SEG, SERVICE
         add sp, 2
-        farcall REVSEG, REV_HOLD     ; dispatch (keys, apply, redraw, exit): the engine timer is masked, cannot fire
         cmp byte [ST_CABP], 0        ; cab coefficients due, and the sound change is done
         je .ncab
         test byte [SNDREQ], 0x20
@@ -816,15 +814,16 @@ knob_core:                           ; si = entry, di = store, al = idx, dl = li
         pop si
         ret
 
-live_set:                            ; al = param p, cx = internal value -> descriptor setter (timer masked)
-        mov ah, 22
+live_set:                            ; al = param p, cx = internal value -> descriptor setter (firmware tick + the
+        mov ah, 22                   ; reverse engine both masked around it, so neither writes the DSP mid-setter)
         mul ah
         mov bx, ax
         mov ax, [bx+PDESC+0x12]
         mov [ST_FP], ax
         mov ax, [bx+PDESC+0x14]
         mov [ST_FP+2], ax
-        mov ax, 0x40f0
+        farcall REVSEG, REV_HOLD     ; reverse engine timer masked (only if it is running); the firmware setter writes
+        mov ax, 0x40f0               ; the DSP untimed, so the engine must not fire inside it
         mov es, ax
         or byte [es:TMIC], 0x40
         push cx
@@ -833,6 +832,7 @@ live_set:                            ; al = param p, cx = internal value -> desc
         mov ax, 0x40f0
         mov es, ax
         and byte [es:TMIC], 0xbf
+        farcall REVSEG, REV_GO
         ret
 
 cab_now:                             ; [ST_CAB] -> HI EQ band: the cab's low-pass coefficients, or (0) the buffer's shelf

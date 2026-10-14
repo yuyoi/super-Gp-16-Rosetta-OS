@@ -387,3 +387,8 @@ make loud noise, but they can't damage anything (the DSP only computes).
   ST_REVPH (DS CE48) written at each setup phase (0x10-0x12 hook, 0x20-0x25 rev_now/engine) -- after a hang, dump RAM
   and read CE48 for the exact point. Reverted the unit to v2.7 meanwhile. emu_v28 checks the breadcrumb hits 0x25 and
   TMIC0 toggles 0x56/0x16.
+- Masking the whole menu loop fixed the hang but was noisy -- user: "extra cascading samples". Cause: the engine
+  timer kept running under the mask so A advanced, but commits were blocked; each unmask fired a commit at the
+  jumped A = stray echo taps. Fix (matches the live tool, which was clean): engine runs FREE through the menu
+  (redraws/keys touch the LCD, not the DSP); the truce is called only where the OS writes the DSP -- rev_now /
+  hook_load / REV_STOP stop the engine, live_set masks TMIC0 around the firmware setter. Removed the mloop-wide mask.
