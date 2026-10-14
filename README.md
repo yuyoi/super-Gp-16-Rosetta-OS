@@ -265,6 +265,7 @@ end of boot, which fixed it there.
 - [ ] REVERSE DLY: burn + ear test, click-free chunk edges, a low-pass after the delay for the 16 kHz - f mirror,
   octave up/down speeds, BOARD slot.
 - [ ] Hold-to-repeat on the knob buttons.
+- [ ] Sort the pedal pick list alphabetically (reorders indices -> `KMAGIC` changes -> stored knob positions reset once).
 - [ ] Crack the rest of the TC23SC260 instruction set (EQ, cab, delay taps and the drive stages are done): new
   algorithms, an OD -> DIST cascade.
 
