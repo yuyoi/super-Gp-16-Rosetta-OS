@@ -37,7 +37,11 @@ MD0      equ 82                      ; 83 counts = 62.25 us; the PLL toggles 82 
 
 ; ---------------------------------------------------------------- the engine (bank 6: DS = 8000, ES = 40F0,
 ; AL = 1, BX = A, BP = step, DX = amax, CX = span, SI = 0, DI = 0x1872 = commit address of chip 2 step 0x072)
-isr:    test [si], al                ; busy: early
+isr:    cmp byte [ss:HOLD_SS], 0     ; OS busy (any menu dispatch): touch the DSP NOT AT ALL -- not even the status
+        jz .run                      ; read below -- or the read lands inside the firmware's own DSP poll and jams it
+        mov word [es:0x82], MD0      ; (sound kept playing, controls died). Freeze A, keep the tick steady, leave.
+        jmp .out
+.run:   test [si], al                ; busy: early
         jz .late
         mov word [es:0x82], MD0 + 1
         mov ah, 12
@@ -53,8 +57,6 @@ isr:    test [si], al                ; busy: early
         jae .wrap
 .in:    test byte [es:0x9e], 0x40    ; TMIC2 masked: the firmware is writing the DSP
         jnz .out
-        cmp byte [ss:HOLD_SS], 0     ; OS menu busy (every dispatch brackets itself with this): skip the commit,
-        jnz .out                     ; A still advanced so timing holds; no DSP write = no collision = no hang
         mov [si + 1], bh             ; A latch high, low
         mov [si], bl
         mov byte [si + 0x0a], 0      ; commit 1 also takes the instruction latch's top byte: the C tap's (00)

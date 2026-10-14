@@ -366,7 +366,7 @@ make loud noise, but they can't damage anything (the DSP only computes).
   cancel would outlive the pedal: `unborrow` writes those 19 steps back from the boot table (commit 0; resets 07A's
   coefficient slot) before every sound change. "A patch push undoes borrowed memory" in mem2s.py was only the tap times.
 
-## v2.8 hang on REV select/exit -> fixed (2026-10-14, hw)
+## v2.8 hang on REV select/exit (2026-10-14, hw)
 - Symptom: with REVERSE DLY picked, navigating/exiting hung the unit (the engine ran continuously; on any menu
   action the OS also wrote the DSP and the engine's commit-1 landed inside it -> stuck busy). Same mechanism as the
   earlier ESC hang. The emulator can't reproduce it (DSP modelled as never-busy).
@@ -374,3 +374,8 @@ make loud noise, but they can't damage anything (the DSP only computes).
   engine may write) and sets it after (all dispatch: the engine skips its commit, A still advances so timing holds).
   stop_core now also waits for the DSP to go idle before unborrow writes it. No DSP write from the engine can overlap
   an OS DSP write. emu_v28 checks the byte toggles 0/1.
+- First fix (hold byte, skip the COMMIT) still hung on hw, but differently: controls died, sound kept playing. That
+  means the engine was fine (sound) but the firmware's main loop was stuck in its own untimed DSP busy-poll. Cause:
+  the engine ISR's FIRST act was `test [si],al` = a DSP STATUS READ, done every tick BEFORE the hold check. That read
+  lands inside the firmware's DSP transaction and jams its poll. Real fix: check the hold byte at the very TOP of the
+  ISR and, when held, touch the DSP not at all (no status read, no commit) -- freeze A, re-arm the tick, FINT/RETRBI.
