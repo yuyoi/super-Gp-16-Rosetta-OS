@@ -6,8 +6,9 @@
 > **Runs on real hardware.** v2.7 runs on a real Roland GP-16 from a flash chip in the IC11 socket. Since v2.4 the
 > OS also reaches into the DSPs themselves: a cab sim built from custom EQ coefficients, and a hidden x2 drive stage
 > that takes the dirt knobs past 10. v2.7 removes stock code nobody needs (the old Edit menu, the factory/test menus)
-> and frees 24 KB of ROM for what comes next. **v2.8 (WIP, emulator-tested, not burned yet)** adds REVERSE DLY: a real
-> reverse delay with the DSP's memory borrowed to 2 s and the dry cancelled inside the DSP. See [Status](#status).
+> and frees 24 KB of ROM for what comes next. **v2.8 (WIP, unstable testing on hardware)** adds REVERSE DLY: a real
+> reverse delay with the DSP's memory borrowed to 2 s and the dry cancelled inside the DSP. It plays on the unit;
+> it is not finished. See [Status](#status) and [the edges](#reverse-delay-the-edges).
 
 A new OS for the Roland GP-16 guitar processor: the rack becomes **one pedal with real knobs**, a **pedal + amp rig**,
 or a **12-slot pedalboard**, played from the front panel with no patch list in the way. It patches your own IC11 dump
@@ -67,6 +68,30 @@ wet), **F** feedback, **T** tone (input cut ~2-8 kHz), **L** level. Under the ho
 silenced so the tap gets 2 s of line, a CPU engine on timer 0 moves the tap backwards every 2 DSP frames, and the
 dry is cancelled with a -1.0 coefficient (`re/rev_blob.asm`, research in `re/DSP_CRACK.md`). Any sound change stops
 the engine and restores the stock DSP program first.
+
+### REVERSE DLY: the edges
+
+This runs on real hardware and sounds like a reverse delay, but it lives at the edge of what a 1989 rack DSP and an
+8 MHz CPU were built to do, and the rough edges are real:
+
+- **It is a CPU trick, not a native effect.** The GP-16's DSP has no reverse mode. The CPU walks the delay tap
+  backwards one step every two DSP frames (~16 kHz) from a timer interrupt. That rate is the hard ceiling, and it is
+  where the **digital crackle** comes from: reversing at half sample rate folds a mirror image in at 16 kHz minus the
+  note, loudest on high notes and at high volume. Lowering the input tone and the level tames it; a low-pass placed
+  *after* the delay would mostly kill it, and is not built yet.
+- **The CPU and the DSP share one set of latches.** If the engine's write and the OS's own DSP write overlap, the
+  interface jams and the unit hangs. The engine now stands down for the whole time the menu is doing anything, which
+  fixed the hang on select/exit, but this is the single most fragile part and the reason this is **unstable testing,
+  not a release**. Writing DSP levels from inside the engine interrupt hangs it outright and scrambles battery RAM;
+  that path is walled off.
+- **Memory is ~2 s.** Borrowing the rest of the delay chip's RAM gets 2.05 s; the DRAM clock sets that wall. Long
+  chunks auto-halve to fit, so very slow tempos shorten the reversed grain.
+- **Still open:** click-free chunk edges (fades must never touch the DSP from the engine interrupt), the post-delay
+  low-pass for the crackle, octave-up/down reverse speeds, and a BOARD slot. Progress and the full DSP reverse-
+  engineering log are in [`re/DSP_CRACK.md`](re/DSP_CRACK.md).
+
+If you burn it: keep your v2.7 image, and if the unit ever hangs, power-cycle. A hang can corrupt battery RAM
+(patches, settings); `re/ramrestore.py` puts it back from a clean dump.
 
 Two voicings are custom: FUNERAL (doom fuzz) and IRON MAN (an early-Iommi voicing). RADIO is a transistor-radio
 amp.
@@ -224,7 +249,7 @@ listing is derived from Roland's code: keep it private.
 | 2.5 | dirt past 10: 11 / 12 via the DSP's hidden x2 stage; the dial scaled for the smooth (no-detent) encoder | works |
 | 2.6 | far blob at the end of ROM; finer steps 10+ / 11 / 11+ / 12 | works |
 | 2.7 | stock Edit menu and power-on factory/test/demo menus removed (call-graph checked), 24 KB freed; EDIT = split | works (boot, SysEx, menus) |
-| 2.8 | WIP: REVERSE DLY pedal (2 s borrowed memory, 100% wet, BPM + note sync); engine stopped on every sound change | emulator PASS (v28, v10, v11), not burned yet |
+| 2.8 | WIP: REVERSE DLY pedal (2 s borrowed memory, 100% wet, BPM + note sync) | **plays on hardware, unstable testing**: works, residual digital crackle at volume, edges still open |
 
 On one unit the LCD contrast used to come up low on about 1 in 5 boots. The OS re-sends the contrast setting at the
 end of boot, which fixed it there.
