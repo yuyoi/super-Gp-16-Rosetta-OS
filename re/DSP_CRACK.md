@@ -392,3 +392,95 @@ make loud noise, but they can't damage anything (the DSP only computes).
   jumped A = stray echo taps. Fix (matches the live tool, which was clean): engine runs FREE through the menu
   (redraws/keys touch the LCD, not the DSP); the truce is called only where the OS writes the DSP -- rev_now /
   hook_load / REV_STOP stop the engine, live_set masks TMIC0 around the firmware setter. Removed the mloop-wide mask.
+
+## 2026-10-14 - crackle autopsy (deep theory, not yet verified on hw)
+
+The "digital crackle that cascades, pops and clicks" is NOT one noise. It is TWO artifacts with two
+different causes, and they want two different fixes. Grounded in rev_blob.asm (the engine) + how the
+M60014 delay memory actually works.
+
+How the engine makes reverse (recap of the mechanism, because the fix depends on it):
+- The gate array keeps ONE ring WRITE pointer that advances +1 sample every frame (hardware, fs ~= 31980 Hz).
+- A tap instruction reads at a fixed OFFSET behind the write pointer. The C tap's offset = A, written to
+  commit 1 (2:072) by the engine ISR.
+- Engine ticks every 2 frames (MD0=82) and does A += 4 (BP=4). So offset advances +2 samples/frame average.
+- Absolute read position = Wptr - A. Wptr goes +1/frame, offset goes +2/frame => abs read moves -1/frame =
+  reverse playback at exactly 1x speed. (BPM/NOTE do NOT change pitch; they set `span` = grain length =
+  how far A travels before it wraps -A-=span. That wrap is the re-trigger / chunk = the tempo.)
+
+### Artifact A - the pops/clicks that CASCADE (periodic, tempo-locked)
+- At every grain wrap (`sub bx,cx`) the read position jumps forward by `span` in memory: the end of one
+  reversed grain butts against the start of the next with NO crossfade. That step discontinuity = a CLICK,
+  once per grain = at the NOTE/BPM rate. At 92 BPM 1/4 that's ~1.4 clicks/s.
+- Why it CASCADES: the pedal runs feedback (recipe fb=36%). The C-tap output (splice click included) is
+  written back into the delay line, read again a grain later, re-spliced, re-clicked, and fed back again.
+  So one click breeds a decaying train of clicks, 0.36^k per grain. High feedback => longer cascade. This
+  is exactly the "cascading samples" the user heard, and it is INHERENT to a spliced reverse with feedback.
+- Worse on attack: a pick transient hits a splice at full amplitude => a big step => a loud pop, which then
+  cascades through the feedback.
+- Honest fix = crossfade the grains (two reversed taps offset by span/2, raised-cosine gain overlap - the
+  studio reverse-delay trick). We have the free L/R taps for the 2nd grain, but the crossfade GAIN has to
+  ramp over the grain, and ramping a level coefficient from the engine ISR is the forbidden hang path.
+  So "proper crossfaded reverse" is a v3 job (precompute? DSP envelope? TBD). Cheap partial fixes:
+  (a) a steeper low-pass IN THE FEEDBACK softens each click edge AND makes the cascade decay faster;
+  (b) lower feedback trades the cascade against the reverse character (user tune by ear).
+
+### Artifact B - the continuous bright FIZZ / "digital crackle" (not periodic)
+- The engine updates the read offset only every 2nd frame, but the hardware write pointer keeps moving
+  every frame. Trace abs read position frame by frame: it goes +1, -3, +1, -3... i.e. a -1/frame staircase
+  with a +/-1 sample SQUARE WAVE at fs/2 (~16 kHz) riding on it. That is a 1-sample peak-to-peak position
+  JITTER at half the sample rate.
+- A position jitter at fs/2 phase-modulates the signal => mirror images at fs/2 +/- f. For a signal
+  component at f, the image sits at ~16 kHz - f (e.g. a 4 kHz harmonic -> 12 kHz image; 6 kHz -> 10 kHz).
+  The deviation grows with frequency, so BRIGHT content and transients fizz the most. This is the "it's
+  digital, crackle" tone, distinct from the rhythmic pops.
+- The 4.5 kHz INPUT cut helped because it removes source HF before it can be imaged, but it cannot remove
+  the images that land BELOW 4.5 kHz, and a 1-pole at 4.5 kHz only pulls the 16 kHz junk down ~11 dB.
+- Honest fix = update the offset EVERY frame (tick at fs, step +2/frame instead of +4/2frames). Then abs
+  read moves a clean -1 every frame, the fs/2 jitter vanishes, and the fizz goes with it. Cost: the ISR
+  fires 2x as often (~32 kHz). Risk: ~2x CPU for the engine AND 2x the window where its interrupt could
+  collide with the firmware's untimed DSP poll (the hang mechanism). Needs a lean ISR + careful TMIC0
+  masking; must be bench-tested for CPU starvation. If full-rate is too heavy: run TWO half-rate taps
+  phase-staggered by 1 frame and sum them - their fs/2 images are antiphase and partially cancel (option B2).
+
+### Reconstruction low-pass (helps BOTH, cheapest first step)
+- A proper reconstruction LPF on the tap OUTPUT (not just the input) around fs/4 ~= 8 kHz attenuates the
+  fs/2 image (B) and rounds the splice step (A). The recipe already has the tap's own cutf; the win is to
+  make sure the cut is steep enough and sits in the feedback path so each regenerated click is tamed too.
+  This is the "crackle-killer low-pass" already queued; the theory says it is a partial fix for BOTH, and
+  should be the first thing tried because it needs no engine timing change.
+
+### Priority to try on the next burn
+1. Lower the tap cutoff / confirm it is in the feedback path (pure data, no engine change) - partial A+B.
+2. Full-rate engine (tick every frame, BP=2) - the real B fix, if CPU survives. Bench for hang/starvation.
+3. Crossfaded grains (v3) - the real A fix, bigger project.
+See revsim.py: an offline model of the pointer arithmetic that renders WAVs of the current engine vs
+full-rate vs crossfade, so fixes can be auditioned without the hardware.
+
+### revsim.py measured (2026-10-14) - the theory holds up numerically
+- Artifact B: 6 kHz sine in, the ENGINE's fs/2 mirror image at 9990 Hz comes out LOUDER than the wanted
+  6 kHz tone itself (image at 0 dB = the peak, the 6 kHz fundamental 7.7 dB BELOW it). That is the fizz,
+  and it is not subtle. FULL-RATE (tick every frame, step +2) buries the image 84 dB down - gone.
+- Artifact A: splice step (peak 2nd-difference), 200 Hz sine, fb 0.36: engine = reference; full-rate alone
+  -10 dB (smooth motion makes the wrap a clean 1-sample step, not a jittery one); crossfaded grains -40 dB.
+- So: full-rate fixes the fizz outright AND halves the splice; crossfade is what actually kills the pops.
+- revsim_out/*.wav: 00_dry, engine (current, both artifacts), fullrate (fizz gone), xfade (both gone),
+  engine_lp2500 (current engine + a 2.5 kHz feedback LPF = the cheap no-engine-change partial).
+
+- 2026-10-14 BURNED v2.8b full-rate (MD0=41, FRAMESTEP=2) to the chip, minipro Verification OK, md5 f13b0ad2 (raw 18326374). First hw test of fix #1. emu_v28 green. Watch: fizz gone (artifact B) vs sluggish controls (CPU starve) / hang (DSP poll collision). Splice pops (artifact A) NOT addressed in this build. Fallback = v2.7.
+
+- 2026-10-14 FULL-RATE FAILED ON HW: v2.8b (MD0=41,FRAMESTEP=2) = "just noise, doesnt delay clean at all". The 2-frame cadence is load-bearing: the ISR skips a tick (timer->1000) whenever it catches the DSP busy; at 2 frames skips are rare (slack), at 1 frame the idle window misaligns, skips pile up, the offset stops advancing +2/frame cleanly and the read pointer drifts off -> noise. Reverted to MD0=82/FRAMESTEP=4 (raw c41a30f8). Lesson: do NOT fix the fizz by raising tick rate. Keep the 2-frame cadence; kill the fs/2 image another way -> (a) feedback LPF #3 (live, safe, try first) or (b) two-tap phase-stagger: 2nd reverse tap on L updated on the opposite phase, summed -> the fs/2 jitter images are antiphase and cancel, no timing change.
+
+- 2026-10-14 BEST STATE YET (2-frame free-running, raw c41a30f8, on hw): reverse SOUNDS GOOD, knobs/params adjust well, NO ongoing menu hang. Remaining wart = a ONE-TIME startup collision: entering REVERSE DLY hangs briefly and blanks the LCD top row (the engine first tick overlaps the firmware still drawing the REVERSE DLY name line), then it SETTLES and runs fine. So the collision is at engine_start (rev_now), not throughout the menu. Fix idea (design offline, do NOT guess-burn): rev_now should not enable the timer instantly mid-redraw; arm the engine and let it start on a later/idle mloop pass once the screen draw is done, or wait for the LCD/firmware to go quiescent before the first tick. Live-tool reverse (revfull.py on v2.7) has NO startup hang.
+
+- 2026-10-14 STARTUP-SETTLE FIX WORKS ON HW ("seems to work now"): v2.8 raw 5282452b / sst512k dcbd5e23. engine_start leaves TMIC0 MASKED (0x56); mloop calls REV_SETTLE (jump table +15) every pass which counts ST_REVGO (0xCE49, init 24) down and unmasks (TMIC0=0x16) once the post-select redraw burst is done. First tick no longer collides with the firmware LCD/DSP work -> no startup hang, no blank top row. So the FULL OS reverse pedal now works: clean entry, good reverse sound, knobs live, no menu hang. Pedal menu at 14078/14080 B (2 B left -> settle logic lives in rev_blob, mloop just farcalls it). REMAINING: the crackle (artifacts A splice-pops + B fs/2 fizz) still there - next is the two-tap phase-stagger (keeps the 2-frame cadence, do NOT raise tick rate) and/or the feedback LPF. Alphabetical sort still bundled (emu_v10/v11 nav counts unfixed).
+
+- 2026-10-14 ROOT CAUSE of the "very prominent noise / DC-on-AC": the INPUT GAIN was severely cranked (user). That drove the 100%-wet mix past full scale -> twos-complement WRAP (positive peaks flip to the negative rail = the DC-on-AC character), louder the harder it is pushed, eased by L down. NOT a mixer bug and NOT the engine. Fix = sane gain staging. The chain-A-dry headroom surgery (drytest dry-step hunt) is therefore SHELVED as unnecessary. Optional robustness: the 0x300 level cap build (raw 5c550039 / sst512k e260e9b6, NOT burned) gives margin so a hot input wraps less; current chip has v2.8 dcbd5e23 (startup-settle, old 0x400 level). Reverse engine itself is confirmed good (clean entry, knobs, sound) at sane gain.
+
+- 2026-10-14 CORRECTION to the above: the real noise source was the FOCUSRITE interface INPUT 1 gain set to 12 (maxed preamp) MONITORING the GP output -> the interface preamp was clipping, downstream of the GP. NOT a GP wet-mix wrap, NOT the engine, NOT a mixer bug. The DSP overflow theory was chasing a downstream monitoring clip. Fix = turn the Focusrite input gain down to line level. GP reverse OS (v2.8 dcbd5e23) is clean and correct as-is; the 0x300 level-cap build is unnecessary, leave the chip on dcbd5e23. All symptoms (L down quieter, MX down worse, TONE no diff, F adds level) are consistent with a maxed monitoring preamp.
+
+- 2026-10-14 RE-CORRECTION (ignore the "it was the Focusrite" entry): the crackle IS real and GP-generated. The user cranks the Focusrite input to MONITOR/amplify a quiet artifact so it can be heard and characterized - the interface is a magnifier, not the source. So the knob fingerprint IS valid GP data: crackle scales with L (reverse-tap level), worse with MX down (more dry/mix content), TONE/cutoff does NOTHING to it (not filterable HF), F only recirculates. That profile = a LEVEL-DEPENDENT MIX-STAGE artifact (overflow/wrap or quantization at the dry+reverse+feedback summing node), NOT the engine timing and NOT filterable. Leading fix: mixer headroom - reduce chain A dry so dry+reverse cannot hit the rail. Need chain A dry step (drytest on MIDI, or dig the ROM chip-2 instruction table offline). GP has refused MIDI all session (rq1 no reply).
+
+- 2026-10-14 PARKED (user call): stop chasing the reverse crackle - it is inherent lo-fi character of forcing reverse from the 80s M60014 DSP (half-rate engine + grain splice + mix-stage limits). Not worth more token/effort. OS REVERSE DLY is DONE + good on hw (dcbd5e23): clean entry, knobs, sound at sane gain; crackle accepted. Do NOT reopen the full-rate / crossfade / mixer-headroom rabbit holes unless the user asks. Next: a different effect / lighter work.
+
+- 2026-10-14 ON-BOX AUTOTUNE = DEAD END (confirmed via GP16_RE.md line ~140): the CPU can only read the DSP BUSY/STATUS at 8000:0/+6; all other 8000 reads are open-bus junk. So there is NO path to read a computed value (pitch estimate) out of the DSP -> both candidate detectors (CPU-swept autocorrelation readout, spectral-tilt envelope-ratio readout) are impossible. No internal-signal->pitch-control routing either (pitch mod sources = LFO/pedal/MIDI only). The GP can SET pitch shift live (0x3D semi, 0x3E fine cents) but cannot DETECT pitch. Only autotune route = PC-driven (detect on PC from OCTA-CAPTURE, poke 0x3D/0x3E via SysEx) = laggy lo-fi novelty. MIC/VOCAL SECTION idea is alive for NON-autotune fx: fixed harmony/octave, detune/shimmer, vocal chorus/reverb/delay, robot fixed-pitch. Fed by a mic via the Focusrite mic pre -> GP input.

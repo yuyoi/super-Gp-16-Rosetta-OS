@@ -117,6 +117,7 @@ REV_NOW  equ 0
 REV_STOP equ 3
 REV_HOLD equ 9               ; mask the engine timer while the OS touches the DSP
 REV_GO   equ 12             ; unmask it for the idle wait
+REV_SETTLE equ 15           ; mloop calls it every pass: counts down ST_REVGO and unmasks the engine at 0
 REVT     equ 0xfc            ; knob table target = reverse setting (2 B: REVT, which) -> ST_RV[which], mloop sets up
 D_BPM    equ 7               ; knob disp: BPM = 40 + k, 3 digits
 D_NOTE   equ 8               ; knob disp: note value name (s_note)
@@ -177,7 +178,8 @@ mloop:                               ; the engine runs free through the menu (re
         jnz .nrev
         mov byte [ST_REVP], 0
         farcall REVSEG, REV_NOW
-.nrev:  cmp byte [ST_SAVE], 0
+.nrev:  farcall REVSEG, REV_SETTLE   ; startup settle: unmasks the engine a few passes after it started (masked),
+        cmp byte [ST_SAVE], 0        ; once the firmware's post-select redraw burst is done (rev_blob owns the count)
         je .nsv
         jmp .save
 .nsv:   mov ax, K_ESC

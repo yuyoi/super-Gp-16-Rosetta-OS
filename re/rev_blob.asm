@@ -22,6 +22,10 @@ ST_RV    equ 0xce40                  ; 4 B: knob positions BPM-40, note, mix 0-1
 ST_REVON equ 0xce45                  ; 1 = engine running
 ST_REVMEM equ 0xce46                 ; 1 = borrowed memory / dry cancel written: unborrow before anything else plays
 ST_REVPH equ 0xce48                  ; breadcrumb: last reverse-setup phase reached (readable after a hang)
+ST_REVGO equ 0xce49                  ; startup settle countdown: engine_start leaves the timer MASKED and sets this;
+                                     ; mloop decrements it each pass and unmasks (REV_GO) at 0, after the firmware's
+                                     ; post-select screen redraw burst -- that burst is what the first tick used to
+                                     ; collide with (hang + blank LCD top row). Buffer is empty/filling here = silent.
 BOOTI    equ 0x14c4                  ; DS: chip 2 boot instructions, 3 B per step (set_coef E83B:06CC reads them)
 REVSEG   equ 0xf301
 TMIC0    equ 0x9c                    ; 40F0:9C timer-0 interrupt control (0x16 = run bank 6 pri 6, 0x47 = masked/stop)
@@ -29,13 +33,22 @@ WBASE    equ 0x0100                  ; tap write address (borrowed memory)
 AMIN     equ 0x0120                  ; shortest read offset (1 ms)
 SPANMAX  equ 0xffbf - AMIN           ; longest chunk x 2 (1019 ms)
 BANK6    equ 0xc0                    ; bank 6 registers in segment 40E0
+; v2.8b full-rate (MD0=41, FRAMESTEP=2) was TRIED on hw 2026-10-14 and FAILED: "just noise, doesn't delay clean
+; at all". Why: the 2-frame cadence is load-bearing. The ISR phase-locks to a DSP-idle window and SKIPS a tick
+; (backs the timer off to 1000) whenever it catches the DSP busy. At 2 frames there is reliable slack so skips
+; are rare; at 1 frame the idle window does not line up every frame, skips pile up, the read offset stops
+; advancing at a clean +2/frame and the reverse read pointer drifts off track -> garbage memory = noise. So
+; full-rate needs a redesigned phase-lock (or a different anti-fizz route: two-tap phase-stagger B2, or lean on
+; the feedback LPF #3). Back to the robust 2-frame engine below.
 MD0      equ 82                      ; 83 counts = 62.25 us; the PLL toggles 82 / 83 (2 DSP frames = 83.38)
+FRAMESTEP equ 4                      ; A += 4 per 2-frame tick = +2 A-units/frame avg = 1x reverse (engine_start -> BP)
 
         jmp near rev_now             ; +0
         jmp near rev_stop            ; +3
         jmp near hook_load           ; +6  (F6A1:0382 jumps here)
         jmp near rev_hold            ; +9   mask the engine timer for the duration of OS dispatch
         jmp near rev_go              ; +12  unmask it for the idle wait
+        jmp near rev_settle          ; +15  mloop every pass: count down the startup settle, then unmask once
 
 ; ---------------------------------------------------------------- menu hold: the gate array cannot take ANY interrupt
 ; mid-DSP-transaction, so a flag the engine merely checks is not enough -- the engine's timer must be truly masked
@@ -56,6 +69,23 @@ rev_go:
         mov ax, 0x40f0
         mov es, ax
         mov byte [es:TMIC0], 0x16    ; timer 0 back: bank 6, priority 6, unmasked
+        pop es
+.r:     retf
+
+; ---------------------------------------------------------------- startup settle: engine_start leaves the timer
+; MASKED (0x56) and sets ST_REVGO. mloop calls this every pass; when the count reaches 0 the firmware's post-select
+; redraw burst is over, so unmask (first tick now misses the LCD/DSP work it used to collide with = the startup hang).
+rev_settle:
+        cmp byte [ST_REVON], 0
+        je .r
+        cmp byte [ST_REVGO], 0
+        je .r
+        dec byte [ST_REVGO]
+        jnz .r
+        push es
+        mov ax, 0x40f0
+        mov es, ax
+        mov byte [es:TMIC0], 0x16     ; settle done: unmask the engine timer
         pop es
 .r:     retf
 
@@ -333,12 +363,12 @@ rev_now:                             ; mloop, once the sound change is done: (re
         and dx, 0x0fff
         mov si, mixw
         call dspc
-        mov al, [ST_RV + 3]          ; 3. LVL k 0-10 -> chain A C level k * 0x400 / 10, chain B 0
-        cmp al, 10
-        jbe .lv
-        mov al, 10
-.lv:    mov ah, 0
-        mov cx, 0x400
+        mov al, [ST_RV + 3]          ; 3. LVL k 0-10 -> chain A C level k * LVLMAX / 10, chain B 0. HEADROOM FIX
+        cmp al, 10                   ; (2026-10-14): the reverse tap + feedback build past full scale on the splice
+        jbe .lv                      ; transients and WRAP into harsh digital crackle (confirmed: L reduces the noise,
+        mov al, 10                   ; cutoff does nothing). Cap the top at 0x300 = the level the live tool (revfull.py)
+.lv:    mov ah, 0                    ; sounded beautiful at, so the whole knob range stays below the clip point.
+        mov cx, 0x300                ; LVLMAX (was 0x400 = +0.5, which clipped with feedback); 0x300 = the proven level
         mul cx
         mov cx, 10
         div cx
@@ -377,6 +407,7 @@ rev_now:                             ; mloop, once the sound change is done: (re
         mov byte [ST_REVPH], 0x24
         call engine_start
         mov byte [ST_REVPH], 0x25    ; breadcrumb: engine running (a hang after this is in the menu, not setup)
+        mov byte [ST_REVGO], 24      ; settle: stay masked for ~24 mloop passes, then mloop unmasks (REV_GO)
 .x:     pop bx
         pop di
         pop si
@@ -405,7 +436,7 @@ engine_start:                        ; cx = span. Vectors 29/30 -> the FINT stub
         mov word [es:bx + 0x0e], 0x40f0  ; DS1 (ES)
         mov word [es:bx + 0x10], 0x1872  ; IY = DI: commit address of 2:072
         mov word [es:bx + 0x12], 0       ; IX = SI
-        mov word [es:bx + 0x14], 4       ; BP = step: speed -1 = 2 (1 - speed) per 2 frames
+        mov word [es:bx + 0x14], FRAMESTEP   ; BP = step per tick (v2.8b: +2/frame = same 1x reverse, full-rate)
         mov word [es:bx + 0x16], 0x01b0  ; SP
         mov word [es:bx + 0x18], AMIN    ; BW = A
         mov ax, AMIN
@@ -417,7 +448,9 @@ engine_start:                        ; cx = span. Vectors 29/30 -> the FINT stub
         mov es, ax
         mov word [es:0x82], MD0
         mov byte [es:0x90], 0x80     ; TMC0: start, fCLK/6, interval
-        mov byte [es:0x9c], 0x16     ; TMIC0: register bank switching, priority 6 = bank 6, unmasked
+        mov byte [es:0x9c], 0x56     ; TMIC0: bank 6, priority 6, but MASKED (bit 6) -> no ticks yet. mloop unmasks
+                                     ; (REV_GO -> 0x16) after the ST_REVGO settle, so the first tick misses the
+                                     ; firmware's startup redraw. The timer (TMC0) IS running; A just advances masked.
         mov byte [ST_REVON], 1
         pop bx
         pop ax

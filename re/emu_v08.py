@@ -129,7 +129,10 @@ def eq(tag, got, want): check(f'{tag}: {got!r} == {want!r}', got == want)
 import importlib.util, os
 spec = importlib.util.spec_from_file_location('pedals', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pedals.py'))
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
-PK = list(P.PEDALS); AK = list(P.AMPS)
+_po = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ped_order.txt')   # v2.8: the ROM's sorted pick order
+if not os.path.exists(_po):
+    raise SystemExit('ped_order.txt missing -- run build_all.py (or gen_pedal_data.py) first')
+PK = open(_po).read().split(); AK = list(P.AMPS)
 mz = PK.index('metalzone') + 1; jcm = AK.index('jcm800') + 1
 def word(*recs):
     c = d = e = 0

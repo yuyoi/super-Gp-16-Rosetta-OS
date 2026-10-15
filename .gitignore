@@ -36,3 +36,5 @@ re/far_data.inc
 re/pedal_menu_v23.asm
 # live engine state written by revlock.py
 re/revlock_state.txt
+re/ped_order.txt
+re/revsim_out/

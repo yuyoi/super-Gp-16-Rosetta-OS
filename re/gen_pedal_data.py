@@ -441,10 +441,15 @@ if __name__ == '__main__':
     assert not missing, f'no knobs/home/name for {missing}'
     assert all(len(NAMES[k]) <= 13 for k in NAMES)
     ks = [KS_BASE]
-    pl, pk = table('ped', P.PEDALS, KNOBS, lambda k: HOME[k], ks)
+    # v2.8: the pedal pick list is sorted by display name (A-Z). PK drives the entry order, the knob-store addresses,
+    # ped_home, the BOARD slot lists and REV_PED, so sorting it here sorts everything. ped_order.txt is the single
+    # source of truth the emulator reads so its pick indices match the ROM. (OFF stays index 0; amps keep their order.)
+    PED_ORDER = sorted(P.PEDALS, key=lambda k: NAMES[k].upper())
+    pl, pk = table('ped', {k: P.PEDALS[k] for k in PED_ORDER}, KNOBS, lambda k: HOME[k], ks)
     al, ak = table('amp', P.AMPS, AMP_KNOBS, lambda k: 11, ks)
     assert ks[0] <= KS_END, hex(ks[0])
-    PK = list(P.PEDALS)
+    PK = PED_ORDER
+    open(os.path.join(here, 'ped_order.txt'), 'w').write('\n'.join(PED_ORDER) + '\n')
     body = pl + al
     body.append('ped_home: db 0xff, ' + ', '.join(str(HOME[k]) for k in PK))
     body.append('ainfo: db ' + ', '.join(f'0x{x:02x}' for x in ainfo()))

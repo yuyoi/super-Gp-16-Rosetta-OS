@@ -109,9 +109,9 @@ SCRIPT = [
     C(lambda: eq('tap write 2:092 -> 030100', final(2, 0x92)[0], 0x030100)),
     C(lambda: eq('L/R reads -> A 0x0101 (commit 1)', (final(2, 0x69)[2], final(2, 0x6C)[2]), (0x0101, 0x0101))),
     C(lambda: eq('MIX 10: 2:07A coef 0x800 (-1.0)', final(2, 0x7A)[1], 0x800)),
-    C(lambda: eq('LVL 8: 2:076 coef 0x333, 2:07C 0', (final(2, 0x76)[1], final(2, 0x7C)[1]), (0x333, 0))),
+    C(lambda: eq('LVL 8: 2:076 coef 0x266 (headroom cap 0x300), 2:07C 0', (final(2, 0x76)[1], final(2, 0x7C)[1]), (0x266, 0))),
     C(lambda: eq('vectors 29/30 -> F301 stubs', (vec(29)[0], vec(30)[0]), (0xF301, 0xF301))),
-    C(lambda: eq('bank 6: PS F301, DS0 8000, DS1 40F0, IY 1872, BP 4, A 0120',
+    C(lambda: eq('bank 6: PS F301, DS0 8000, DS1 40F0, IY 1872, BP 4 (2-frame), A 0120',
                  [bank6(r) for r in ('ps', 'ds0', 'ds1', 'iy', 'bp', 'bw')], [0xF301, 0x8000, 0x40F0, 0x1872, 4, 0x120])),
     C(lambda: eq('span 92 BPM 1/4 (41713) and amax = 0120 + span', (bank6('cw'), bank6('dw')), (41713, 0x120 + 41713))),
     C(lambda: check(f'timer 0 on (TMC0 80, TMIC0 16): {st["t0"][-3:]}', t0_on())),
@@ -146,7 +146,7 @@ SCRIPT = [
                     len(st['live']) > S['live'] and st['revnow'] == S['n'] and t0_on())),
     C(lambda: check('engine timer masked (0x56) + unmasked (0x16) around the live setter', 0x56 in st['tmic0'] and 0x16 in st['tmic0'])),
     dmark('button 6 = L, VALUE up -> 9'), ('key', 6), ('key', 0x0A), ('wait',), ('wait',),
-    C(lambda: eq('L 9: 2:076 = 0x399', final(2, 0x76)[1], 0x399)),
+    C(lambda: eq('L 9: 2:076 = 0x2B3 (headroom cap 0x300)', final(2, 0x76)[1], 0x2B3)),
     # leaving
     C(lambda: S.update(n=st['revnow'])),
     ('key', 0x0D), ('wait',), lcdh('ESC -> split', 'PEDAL'),
@@ -167,7 +167,7 @@ SCRIPT = [
                     st['hook'] > S['h'] and t0_off() and rd(0xCE45)[0] == 0)),
     ('dial', ped('revdelay')), ('wait',), ('wait',), ('wait',),
     C(lambda: check('REV again: engine on, MIX 10 / L 9 / F 5 kept', t0_on() and final(2, 0x7A)[1] == 0x800
-                    and final(2, 0x76)[1] == 0x399 and last(0x4E) == 45)),
+                    and final(2, 0x76)[1] == 0x2B3 and last(0x4E) == 45)),
     # exit to the patch screen
     ('key', 0x0D), ('key', 0x0D), ('wait',), ('wait',),
     C(lambda: check(f'exit: engine off ({st["t0"][-2:]})', t0_off() and rd(0xCE45)[0] == 0)),
