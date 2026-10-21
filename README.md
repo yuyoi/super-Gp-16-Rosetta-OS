@@ -16,6 +16,8 @@ or a **12-slot pedalboard**, played from the front panel with no patch list in t
 Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler-RosettaRom) and the
 [D-110 Rosetta OS](https://github.com/yuyoi/D110-rosetta-OS-v11).
 
+**💬 Join the community:** [Rosetta Discord](https://discord.gg/R3CQkFdRtf)
+
 ## What it does
 
 - **Boots as the pedal.** Power-on shows "JSW ROSETTA OS" with a flying dragon, then goes straight to the last mode
